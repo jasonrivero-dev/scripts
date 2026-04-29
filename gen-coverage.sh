@@ -58,20 +58,21 @@ fi
 # --- 3. Surgical Coverage Collection ---
 log "Starting Coverage Collection for ${BUILD_TARGET}..."
 
-# Mismatch/Negative bypasses for threads; Source/Gcov for missing headers and noise
 lcov --capture --directory "${PROJECT_ROOT}" \
      --output-file "${PROJECT_ROOT}/coverage.info" \
      --ignore-errors mismatch,negative,source,gcov
 
 # --- 4. Filtering & Noise Reduction ---
 log "Filtering system and third-party noise..."
-# Added .conan2 to patterns to remove external library headers from the report
+# SURGICAL ADDITION: Filter out '*/cmake-build-relwithdebinfo/*' to remove Catch2 ghost headers.
+# This prevents genhtml from looking for files that don't exist in the build tree.
 lcov --remove "${PROJECT_ROOT}/coverage.info" \
      '/usr/*' \
      '*/third/*' \
      '*/test/*' \
      '*/fbs/*' \
      '*/.conan2/*' \
+     '*/cmake-build-relwithdebinfo/*' \
      --output-file "${PROJECT_ROOT}/filtered.info" \
      --ignore-errors unused
 
@@ -79,9 +80,10 @@ lcov --remove "${PROJECT_ROOT}/coverage.info" \
 log "Generating HTML report..."
 mkdir -p "${REPORT_DIR}"
 
-# SURGICAL FIX: Added --ignore-errors source to genhtml to bypass missing Catch2 headers
+# SURGICAL FIX: Added --synthesize-missing to handle any lingering missing file references.
 genhtml "${PROJECT_ROOT}/filtered.info" \
         --output-directory "${REPORT_DIR}" \
-        --ignore-errors source
+        --ignore-errors source \
+        --synthesize-missing
 
 log "Surgical Analysis Successful."
