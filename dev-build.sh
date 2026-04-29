@@ -5,7 +5,16 @@ set -e
 
 finish()
 {
-
+    # SURGICAL SUMMARY: Added to provide a clear receipt of the build parameters
+    echo "------------------------------------------------"
+    echo -e "Surgical Build Summary:"
+    echo -e "  Target:   ${BUILD_TARGET}"
+    echo -e "  Config:   ${BUILD_CONFIG}"
+    echo -e "  Clean:    ${CLEAN_BUILD}"
+    echo -e "  Metrics:  ${REBUILD_METRICS}"
+    echo -e "  Coverage: ${ENABLE_COV}"
+    echo -e "  Run:      ${RUN_AFTER}"
+    echo "------------------------------------------------"
     echo "Execution complete."
     echo "Done."
 }
@@ -129,13 +138,3 @@ if [ "$RUN_AFTER" = true ] && [ -f "${PROJECT_ROOT}/build.sh" ]; then
 fi
 
 log "Surgical Build Complete."
-
-echo "------------------------------------------------"
-echo -e "Surgical Build Summary:"
-echo -e "  Target:   ${BUILD_TARGET}"
-echo -e "  Config:   ${BUILD_CONFIG}"
-echo -e "  Clean:    ${CLEAN_BUILD}"
-echo -e "  Metrics:  ${REBUILD_METRICS}"
-echo -e "  Coverage: ${ENABLE_COV}"
-echo -e "  Run:      ${RUN_AFTER}"
-echo "------------------------------------------------"
