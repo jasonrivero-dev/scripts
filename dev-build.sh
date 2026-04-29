@@ -5,11 +5,12 @@ set -e
 
 finish()
 {
-    echo "------------------------------------------------"
+
     echo "Execution complete."
     echo "Done."
 }
 
+# Register the trap to call our function on exit
 trap finish EXIT
 
 # --- 1. Defaults & Parameter Parsing ---
@@ -20,7 +21,7 @@ CLEAN_BUILD=false
 ENABLE_COV=false
 RUN_AFTER=false
 
-# Colors
+# Colors for the UI
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
@@ -71,14 +72,11 @@ if [ "$CLEAN_BUILD" = true ]; then
     rm -rf "${PROJECT_ROOT}/back_end/libs/ffmpeg_recorder/build"
     rm -rf "$BUILD_DIR"
     
-    # NEW: Conan Reconstruction logic
     if [ -f "${PROJECT_ROOT}/conanfile.py" ]; then
         log "Reconstructing Conan dependencies (using venv)..."
-        # We source the venv as requested to ensure conan is in the path
         if [ -f "$HOME/.venv/bin/activate" ]; then
             source "$HOME/.venv/bin/activate"
             pushd "${PROJECT_ROOT}" > /dev/null
-            # Using your specific command 1903 from the logs
             conan install . --output-folder="${BUILD_DIR}" -s build_type=${BUILD_CONFIG} --build=missing
             popd > /dev/null
         else
@@ -111,7 +109,6 @@ fi
 
 mkdir -p "$BUILD_DIR"
 
-# Note: The toolchain path is now guaranteed by the Conan Reconstruction step above
 cmake -G Ninja \
   $COV_FLAG \
   -DCMAKE_CXX_FLAGS="$CXX_FLAGS" \
@@ -132,3 +129,13 @@ if [ "$RUN_AFTER" = true ] && [ -f "${PROJECT_ROOT}/build.sh" ]; then
 fi
 
 log "Surgical Build Complete."
+
+echo "------------------------------------------------"
+echo -e "Surgical Build Summary:"
+echo -e "  Target:   ${BUILD_TARGET}"
+echo -e "  Config:   ${BUILD_CONFIG}"
+echo -e "  Clean:    ${CLEAN_BUILD}"
+echo -e "  Metrics:  ${REBUILD_METRICS}"
+echo -e "  Coverage: ${ENABLE_COV}"
+echo -e "  Run:      ${RUN_AFTER}"
+echo "------------------------------------------------"
