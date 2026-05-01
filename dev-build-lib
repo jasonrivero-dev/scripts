@@ -72,52 +72,48 @@ run_tests_host()
 
 process_coverage_host()
 {
-    log "Capturing Host Coverage (Surgical -d scan)..."
+    log "Aligning Host Coverage with Docker Standards..."
+    local INFO_RAW="${PROJECT_ROOT}/coverage_raw.info"
     local INFO_FILE="${PROJECT_ROOT}/coverage.info"
     local REPORT_DIR="${PROJECT_ROOT}/reports/host_coverage_report"
 
-    # SURGICAL FIX: Added 'source' to ignore-errors to bypass Catch2 path whines
-    lcov --capture --directory "${BUILD_DIR}" \
-         --output-file "${INFO_FILE}" \
+    # 1. Capture with Base Anchor
+    # Anchoring to back_end ensures relative paths match the Docker report
+    lcov --capture \
+         --directory "${BUILD_DIR}" \
+         --base-directory "${PROJECT_ROOT}/back_end" \
+         --output-file "${INFO_RAW}" \
          --ignore-errors mismatch,source,gcov
 
-    if [ ! -f "${INFO_FILE}" ]; then
-        error "Coverage info file not found! Expected at: ${INFO_FILE}"
-        return
-    fi
+    # 2. Extract Only Project Source
+    # Mirrors the Docker 'extract' phase to eliminate external hits
+    lcov --extract "${INFO_RAW}" "${PROJECT_ROOT}/back_end/*" \
+         --output-file "${INFO_FILE}" \
+         --ignore-errors unused,source
 
-    log "Filtering Noise..."
-    # SURGICAL FIX: Added '--ignore-errors unused' to prevent exit on missing folders
+    # 3. Comprehensive Filtering
+    # Merged filter set from build.sh and Makefile
     lcov --remove "${INFO_FILE}" \
          '/usr/*' \
+         '*/deps/*' \
          '*/third/*' \
          '*/test/*' \
+         '*/tests/*' \
          '*/fbs/*' \
          '*/_deps/*' \
+         '*/.conan2/*' \
          '*/cmake-build-*' \
          -o "${INFO_FILE}" \
          --quiet \
          --ignore-errors unused
-    
-    if [ ! -f "${INFO_FILE}" ]; then
-        error "Filtered coverage info file not found! Expected at: ${INFO_FILE}"
-        return
-    fi
 
-    log "Generating HTML Report..."
-    rm -rfv "${REPORT_DIR}"
+    # 4. Generate Report
+    rm -rf "${REPORT_DIR}"
     mkdir -p "${REPORT_DIR}"
-    # Ignore 'source' here to prevent genhtml from failing on external Catch2 files
     genhtml "${INFO_FILE}" \
             --output-directory "${REPORT_DIR}" \
             --ignore-errors source,unused \
             --quiet
     
-    if [ ! -d "${REPORT_DIR}" ] || [ ! -f "${REPORT_DIR}/index.html" ]; then
-        error "Coverage report directory not found! Expected at: ${REPORT_DIR}"
-        error "Expected index.html at: ${REPORT_DIR}/index.html"
-        return
-    fi
-
-    log "Host Coverage Success: ${REPORT_DIR}/index.html"
+    log "Host Alignment Complete: ${REPORT_DIR}/index.html"
 }
