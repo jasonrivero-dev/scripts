@@ -1,0 +1,85 @@
+# dev-build-lib: Surgical Host-side Functions for Celeste
+
+clean_host_build()
+{
+    log "Surgical Clean: Removing host-specific artifacts..."
+    # Verbose removal to see exactly what is being purged
+    rm -rfv "${PROJECT_ROOT}/back_end/cmake-build-${BUILD_CONFIG}"
+    rm -rfv "${PROJECT_ROOT}/back_end/libs/ffmpeg_recorder/build"
+}
+
+rebuild_metrics_host()
+{
+    log "Rebuilding Metrics (Host-side Clean Start)..."
+    pushd "${PROJECT_ROOT}/third/metrics-cpp" > /dev/null
+    rm -rf build_host
+    mkdir -p build_host
+    cmake -S . -B build_host -DCMAKE_INSTALL_PREFIX="${PROJECT_ROOT}/deps/metrics-cpp"
+    cmake --build build_host --target metrics --config "$BUILD_CONFIG"
+    cmake --install build_host
+    popd > /dev/null
+}
+
+configure_and_build_host()
+{
+    log "Configuring Host CMake (Coverage: ${ENABLE_COV})..."
+    
+    local COV_FLAG="-DENABLE_COVERAGE=OFF"
+    if [ "$ENABLE_COV" = true ]
+    then
+        COV_FLAG="-DENABLE_COVERAGE=ON"
+    fi
+
+    # SURGICAL FIX: Dynamically find the toolchain to solve the casing mismatch
+    local TOOLCHAIN_FILE=$(find "${PROJECT_ROOT}/back_end" -name "conan_toolchain.cmake" | head -n 1)
+    
+    if [ -z "$TOOLCHAIN_FILE" ]
+    then
+        error "Conan toolchain not found! Ensure you have run conan install on the host."
+    fi
+
+    log "Using Toolchain: ${TOOLCHAIN_FILE}"
+    mkdir -p "${BUILD_DIR}"
+    
+    cmake -G Ninja \
+        ${COV_FLAG} \
+        -DCMAKE_CXX_FLAGS="-fprofile-update=atomic" \
+        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
+        -DCMAKE_BUILD_TYPE="${BUILD_CONFIG}" \
+        -DCMAKE_PREFIX_PATH="${PROJECT_ROOT}/deps/libtorch" \
+        -DCMAKE_LIBRARY_PATH="${PROJECT_ROOT}/build" \
+        -DCMAKE_CUDA_COMPILER=/usr/bin/nvcc \
+        -S "${PROJECT_ROOT}/back_end" -B "${BUILD_DIR}"
+
+    local TARGETS="celeste"
+    if [ "$RUN_TESTS" = true ] || [ "$ENABLE_COV" = true ]
+    then
+        TARGETS="celeste tests recorder_tests ffmpeg_recorder"
+    fi
+
+    log "Executing Host Ninja (Targets: ${TARGETS})..."
+    ninja -C "${BUILD_DIR}" ${TARGETS}
+}
+
+run_tests_host()
+{
+    log "Executing Host Unit Tests..."
+    export LD_LIBRARY_PATH="${BUILD_DIR}:${LD_LIBRARY_PATH}"
+    
+    "${BUILD_DIR}/tests"
+    "${BUILD_DIR}/test/recorder_tests"
+}
+
+process_coverage_host()
+{
+    log "Capturing Host Coverage (Surgical -d scan)..."
+    local INFO_FILE="${PROJECT_ROOT}/coverage.info"
+    local REPORT_DIR="${PROJECT_ROOT}/reports/host_coverage_report"
+
+    lcov --capture --directory "${BUILD_DIR}" --output-file "${INFO_FILE}" --ignore-errors mismatch,source
+    lcov --remove "${INFO_FILE}" '/usr/*' '*/third/*' '*/test/*' '*/fbs/*' '*/_deps/*' -o "${INFO_FILE}" --quiet
+    mkdir -p "${REPORT_DIR}"
+    genhtml "${INFO_FILE}" --output-directory "${REPORT_DIR}" --ignore-errors source --quiet
+    
+    log "Host Coverage Success: ${REPORT_DIR}/index.html"
+}

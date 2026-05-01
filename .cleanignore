@@ -1,0 +1,8 @@
+.vscode/
+.venv/
+.python-version
+*.log
+reports/
+coverage_filtered.info
+noveye-local-main.cfg
+noveye-local-novai.cfg
