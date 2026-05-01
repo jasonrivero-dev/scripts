@@ -7,29 +7,29 @@ SCRIPTS_DIR=$(dirname "$SCRIPT_PATH")
 DEV_ROOT=$(dirname "$SCRIPTS_DIR")
 PROJECT_ROOT="${DEV_ROOT}/celeste"
 
-# Source libraries
 source "${SCRIPTS_DIR}/dev-log-lib"
 source "${SCRIPTS_DIR}/dev-build-lib"
 
-# Default state
 BUILD_CONFIG="RelWithDebInfo"
 CLEAN_BUILD=false
 REBUILD_METRICS=false
 ENABLE_COV=false
 RUN_TESTS=false
 BUILD_TARGET="celeste"
+SUCCESS=false # Tracker for the summary
 BUILD_DIR="${PROJECT_ROOT}/back_end/cmake-build-${BUILD_CONFIG}"
+REPORT_DIR="${PROJECT_ROOT}/reports/host_coverage_report"
 
 # --- 2. Summary Trap ---
 finish()
 {
-    local REPORT_DIR="${PROJECT_ROOT}/reports/host_coverage_report"
     echo "------------------------------------------------"
     log "Execution Summary:"
+    if [ "$SUCCESS" = true ]; then log "  STATUS:      SUCCESS"; else error "  STATUS:      FAILED"; fi
     echo -e "  Target:      ${BUILD_TARGET}"
     echo -e "  Project Dir: ${PROJECT_ROOT}"
     echo -e "  Report Dir:  ${REPORT_DIR}"
-    echo -e "  Build dir:   ${BUILD_DIR}"
+    echo -e "  Build Dir:   ${BUILD_DIR}"
     echo "------------------------------------------------"
     log "Analysis Execution Complete."
 }
@@ -45,6 +45,8 @@ show_help()
     echo "  -c,  --coverage  Enable code coverage (CMake)"
     echo "  -r,  --run       Execute unit tests"
     echo "  -t,  --target    Build config (default: RelWithDebInfo)"
+    # Surgical Fix: Unregister trap so help doesn't trigger "FAILED" summary
+    trap - EXIT
     exit 0
 }
 
@@ -63,23 +65,14 @@ do
     shift
 done
 
-
 # --- 4. Chained Execution Pipeline ---
 
-# Stage A: Cleaning
-if [ "$CLEAN_BUILD" = true ]
-then
-    clean_host_build
-fi
+if [ "$CLEAN_BUILD" = true ]; then clean_host_build; fi
 
-# Stage B: Metrics
-if [ "$REBUILD_METRICS" = true ]
-then
-    rebuild_metrics_host
-fi
+if [ "$REBUILD_METRICS" = true ]; then rebuild_metrics_host; fi
 
-# Stage C: Compilation
-if [ "$CLEAN_BUILD" = false ] || [ "$REBUILD_METRICS" = true ] || [ "$ENABLE_COV" = true ] || [ "$RUN_TESTS" = true ]
+# Stage C: Compilation (Triggered ONLY if metrics, coverage, or run is requested)
+if [ "$REBUILD_METRICS" = true ] || [ "$ENABLE_COV" = true ] || [ "$RUN_TESTS" = true ]
 then
     if [ "$ENABLE_COV" = true ] || [ "$RUN_TESTS" = true ]
     then
@@ -88,16 +81,9 @@ then
     configure_and_build_host
 fi
 
-# Stage D: Execution
-if [ "$RUN_TESTS" = true ]
-then
-    run_tests_host
-fi
+if [ "$RUN_TESTS" = true ]; then run_tests_host; fi
 
-# Stage E: Coverage Reporting
-if [ "$ENABLE_COV" = true ] && [ "$RUN_TESTS" = true ]
-then
-    process_coverage_host
-fi
+if [ "$ENABLE_COV" = true ] && [ "$RUN_TESTS" = true ]; then process_coverage_host; fi
 
+SUCCESS=true # Set to true only if all stages pass
 exit 0

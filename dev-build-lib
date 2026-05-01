@@ -3,7 +3,7 @@
 clean_host_build()
 {
     log "Surgical Clean: Removing host-specific artifacts..."
-    # Verbose removal to see exactly what is being purged
+    # Verbose removal confirms we are killing the specific CamelCase folder
     rm -rfv "${PROJECT_ROOT}/back_end/cmake-build-${BUILD_CONFIG}"
     rm -rfv "${PROJECT_ROOT}/back_end/libs/ffmpeg_recorder/build"
 }
@@ -30,12 +30,12 @@ configure_and_build_host()
         COV_FLAG="-DENABLE_COVERAGE=ON"
     fi
 
-    # SURGICAL FIX: Dynamically find the toolchain to solve the casing mismatch
+    # Dynamically find toolchain to survive the 'relwithdebinfo' vs 'RelWithDebInfo' mess
     local TOOLCHAIN_FILE=$(find "${PROJECT_ROOT}/back_end" -name "conan_toolchain.cmake" | head -n 1)
     
     if [ -z "$TOOLCHAIN_FILE" ]
     then
-        error "Conan toolchain not found! Ensure you have run conan install on the host."
+        error "Conan toolchain not found! Run conan install on host."
     fi
 
     log "Using Toolchain: ${TOOLCHAIN_FILE}"
@@ -76,10 +76,48 @@ process_coverage_host()
     local INFO_FILE="${PROJECT_ROOT}/coverage.info"
     local REPORT_DIR="${PROJECT_ROOT}/reports/host_coverage_report"
 
-    lcov --capture --directory "${BUILD_DIR}" --output-file "${INFO_FILE}" --ignore-errors mismatch,source
-    lcov --remove "${INFO_FILE}" '/usr/*' '*/third/*' '*/test/*' '*/fbs/*' '*/_deps/*' -o "${INFO_FILE}" --quiet
-    mkdir -p "${REPORT_DIR}"
-    genhtml "${INFO_FILE}" --output-directory "${REPORT_DIR}" --ignore-errors source --quiet
+    # SURGICAL FIX: Added 'source' to ignore-errors to bypass Catch2 path whines
+    lcov --capture --directory "${BUILD_DIR}" \
+         --output-file "${INFO_FILE}" \
+         --ignore-errors mismatch,source,gcov
+
+    if [ ! -f "${INFO_FILE}" ]; then
+        error "Coverage info file not found! Expected at: ${INFO_FILE}"
+        return
+    fi
+
+    log "Filtering Noise..."
+    # SURGICAL FIX: Added '--ignore-errors unused' to prevent exit on missing folders
+    lcov --remove "${INFO_FILE}" \
+         '/usr/*' \
+         '*/third/*' \
+         '*/test/*' \
+         '*/fbs/*' \
+         '*/_deps/*' \
+         '*/cmake-build-*' \
+         -o "${INFO_FILE}" \
+         --quiet \
+         --ignore-errors unused
     
+    if [ ! -f "${INFO_FILE}" ]; then
+        error "Filtered coverage info file not found! Expected at: ${INFO_FILE}"
+        return
+    fi
+
+    log "Generating HTML Report..."
+    rm -rfv "${REPORT_DIR}"
+    mkdir -p "${REPORT_DIR}"
+    # Ignore 'source' here to prevent genhtml from failing on external Catch2 files
+    genhtml "${INFO_FILE}" \
+            --output-directory "${REPORT_DIR}" \
+            --ignore-errors source,unused \
+            --quiet
+    
+    if [ ! -d "${REPORT_DIR}" ] || [ ! -f "${REPORT_DIR}/index.html" ]; then
+        error "Coverage report directory not found! Expected at: ${REPORT_DIR}"
+        error "Expected index.html at: ${REPORT_DIR}/index.html"
+        return
+    fi
+
     log "Host Coverage Success: ${REPORT_DIR}/index.html"
 }
