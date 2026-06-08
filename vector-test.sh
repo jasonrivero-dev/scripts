@@ -16,6 +16,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
+mkdir -p /tmp/vector-data
+
 cleanup() { :; }
 trap cleanup EXIT
 
@@ -102,7 +104,7 @@ else
 fi
 
 # Verify AWS Testing Credentials
-if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ] || [ -z "$AWS_SESSION_TOKEN" ]; then
+if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
     error "AWS testing credentials are not set! Export your keys before continuing."
     return 1 2>/dev/null || exit 1
 fi
@@ -112,12 +114,6 @@ log "Initializing local testing environment configuration..."
 # 1. Base Directory Mappings
 export TELEMETRY_CONFIG_DIR="$(pwd)"
 export VECTOR_DATA_DIR="/tmp/vector-data"
-
-# 2. Identity Labels
-# export SWR_CUSTOMER="$(whoami)"
-# export SWR_LOCATION="$(hostname)"
-# export SWR_TYPE="dev_laptop"
-# export SWR_ID="SWR-LAPTOP"
 
 # 3. AWS Destination Variables
 export AWS_PROMETHEUS_ENDPOINT="https://aps-workspaces.us-west-2.amazonaws.com/workspaces/ws-351bc544-bb2b-4ad6-b15f-8abc5332b0fb/api/v1/remote_write"
