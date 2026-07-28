@@ -103,6 +103,11 @@ else
     return 1 2>/dev/null
 fi
 
+unset AWS_ACCESS_KEY_ID
+unset AWS_SECRET_ACCESS_KEY
+export AWS_ACCESS_KEY_ID="$AWS_IAM_ID"
+export AWS_SECRET_ACCESS_KEY="$AWS_IAM_KEY"
+
 # Verify AWS Testing Credentials
 if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
     error "AWS testing credentials are not set! Export your keys before continuing."
@@ -116,8 +121,10 @@ export TELEMETRY_CONFIG_DIR="$(pwd)"
 export VECTOR_DATA_DIR="/tmp/vector-data"
 
 # 3. AWS Destination Variables
-export AWS_PROMETHEUS_ENDPOINT="https://aps-workspaces.us-west-2.amazonaws.com/workspaces/ws-351bc544-bb2b-4ad6-b15f-8abc5332b0fb/api/v1/remote_write"
+# export AWS_PROMETHEUS_ENDPOINT="https://aps-workspaces.us-west-2.amazonaws.com/workspaces/ws-351bc544-bb2b-4ad6-b15f-8abc5332b0fb/api/v1/remote_write"
+export AWS_PROMETHEUS_ENDPOINT="https://aps-workspaces.us-west-2.amazonaws.com/workspaces/ws-19c31f7d-a52e-4e54-94f6-3ec8f87b5150/api/v1/remote_write"
 export AWS_DEFAULT_REGION="us-west-2"
+
 
 # 4. Comprehensive Metric Configuration Output
 log "========================================================"
@@ -129,6 +136,8 @@ log "SWR_TYPE               : ${SWR_TYPE}"
 log "SWR_ID                 : ${SWR_ID}"
 log "AWS_PROMETHEUS_ENDPOINT: ${AWS_PROMETHEUS_ENDPOINT}"
 log "AWS_DEFAULT_REGION     : ${AWS_DEFAULT_REGION}"
+log "AWS_ACCESS_KEY_ID      : ${AWS_ACCESS_KEY_ID}"
+log "AWS_SECRET_ACCESS_KEY  : [REDACTED]"
 log "========================================================"
 log "Environment variables successfully set up for current path context."
 

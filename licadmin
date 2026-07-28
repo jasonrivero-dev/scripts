@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# High-visibility terminal colors
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+PROJECT_DIR="$HOME/dev/Licensing"
+KEY_FILE="$HOME/.licadmin_keys"
+
+# Safety check for project directory
+if [ ! -d "$PROJECT_DIR" ]; then
+    echo -e "[${RED}ERROR${NC}] Could not find Licensing workspace directory at: $PROJECT_DIR" >&2
+    exit 1
+fi
+
+log() {
+    echo -e "[$(date +"%H:%M:%S")] [${GREEN}INFO${NC}] $@"
+}
+
+warn() {
+    echo -e "[$(date +"%H:%M:%S")] [${YELLOW}WARN${NC}] $@"
+}
+
+# --- 1. AUTO KEY INITIALIZER ---
+# Reads or automatically generates your local development signing keys
+init_keys_if_needed() {
+    if [ ! -f "$KEY_FILE" ]; then
+        warn "Administrative key storage not found. Running initial Ed25519 key generation..."
+        
+        # Compile and execute the keygen tool natively
+        local output
+        output=$(cargo run --manifest-path "$PROJECT_DIR/Cargo.toml" -p licensing-cli --quiet -- keygen)
+        
+        # Parse output strings securely
+        local priv_key
+        priv_key=$(echo "$output" | grep -A 1 "Private (Signing) Key Hex :" | tail -n 1)
+        local pub_key
+        pub_key=$(echo "$output" | grep -A 1 "Public (Verifying) Key Hex" | tail -n 1)
+        
+        # Save to local home config directory
+        echo "PRIVATE_KEY=$priv_key" > "$KEY_FILE"
+        echo "PUBLIC_KEY=$pub_key" >> "$KEY_FILE"
+        
+        log "🔑 New keys generated and cached in: $KEY_FILE"
+        warn "CRITICAL ACTION: Update your public_key in /etc/novarc/licensing/config.toml to:"
+        echo -e "${GREEN}$pub_key${NC}"
+        echo "----------------------------------------------------"
+    fi
+    
+    # Load keys into script context
+    source "$KEY_FILE"
+}
+
+# --- 2. THE LAZY GENERATOR & DEPLOYER ---
+lazy_issue() {
+    init_keys_if_needed
+
+    local customer="${1:-local_dev_user}"
+    local app="${2:-celeste_autonomy}"
+    
+    # Auto-fetch the local machine's physical hardware ID
+    log "Querying local system hardware identifier..."
+    local hwid
+    if command -v lictl &>/dev/null; then
+        # Query via lictl to bypass file read permissions
+        hwid=$(sudo lictl hwid)
+    elif [ -f "/etc/machine-id" ]; then
+        hwid=$(cat /etc/machine-id)
+    else
+        hwid="DEVELOPMENT_FALLBACK_HWID"
+    fi
+    log "Resolved Host HWID: ${hwid}"
+
+    # Auto-calculate expiration date (Exactly 1 Year from today)
+    local expiry
+    expiry=$(date -u -d "+1 year" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -v+1y +"%Y-%m-%dT%H:%M:%SZ")
+    log "Calculated Expiration Date: ${expiry} (1 Year Validity)"
+
+    local output_lic="./dev_license.lic"
+
+    log "Signing license payload..."
+    cargo run \
+        --manifest-path "$PROJECT_DIR/Cargo.toml" \
+        -p licensing-cli \
+        --quiet \
+        -- \
+        issue \
+        --secret-key "$PRIVATE_KEY" \
+        --customer-id "$customer" \
+        --hardware-id "$hwid" \
+        --app "$app" \
+        --expires "$expiry" \
+        --grace-days 5 \
+        --output "$output_lic"
+
+    # Automatically install and deploy the license to the running system daemon
+    if command -v lictl &>/dev/null; then
+        log "Deploying valid license directly to system directory..."
+        sudo lictl install-license "$output_lic"
+        rm -f "$output_lic"
+    else
+        warn "lictl command not globally installed. Generated license left at: $output_lic"
+    fi
+}
+
+# Command dispatching interface
+if [ $# -eq 0 ]; then
+    echo "Usage: licadmin {lazy-issue [customer_name] [app_name] | keygen | hwid}"
+    exit 0
+fi
+
+COMMAND=$1
+case "$COMMAND" in
+    lazy-issue)
+        shift
+        lazy_issue "$@"
+        ;;
+    keygen)
+        cargo run --manifest-path "$PROJECT_DIR/Cargo.toml" -p licensing-cli --quiet -- keygen
+        ;;
+    hwid)
+        if command -v lictl &>/dev/null; then
+            sudo lictl hwid
+        else
+            cargo run --manifest-path "$PROJECT_DIR/Cargo.toml" -p licensing-cli --quiet -- hwid
+        fi
+        ;;
+    *)
+        # Passthrough everything else to CLI
+        cargo run --manifest-path "$PROJECT_DIR/Cargo.toml" -p licensing-cli --quiet -- "$@"
+        ;;
+esac
