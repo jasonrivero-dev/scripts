@@ -114,14 +114,19 @@ log "Wiring up /opt/novarc/apps (sudo needed -- this is where celeste's compiled
 sudo mkdir -p "${OPT_ETC}"
 sudo ln -sfn "${CELESTE_FILES}/ai_nn" "${OPT_APPS}/ai_nn"
 
-if [[ -f "${OPT_ETC}/noveye.cfg" ]] && [[ ! -L "${OPT_ETC}/noveye.cfg" ]]; then
+# Only back up when actually about to overwrite something different -- otherwise
+# re-running this script (it's meant to be re-run after editing
+# celeste-files/noveye.cfg) would leave a new timestamped backup every time, even
+# when nothing changed, since the deployed file is a plain copy, not a symlink.
+if [[ -f "${OPT_ETC}/noveye.cfg" ]] && ! cmp -s "${CELESTE_FILES}/noveye.cfg" "${OPT_ETC}/noveye.cfg"; then
     backup="${OPT_ETC}/noveye.cfg.bak-$(date +%Y%m%d%H%M%S)"
-    log "Backing up existing ${OPT_ETC}/noveye.cfg to ${backup}..."
+    log "Deployed config differs -- backing up existing ${OPT_ETC}/noveye.cfg to ${backup}..."
     sudo cp "${OPT_ETC}/noveye.cfg" "${backup}"
+    log "Deploying config to ${OPT_ETC}/noveye.cfg..."
+    sudo cp "${CELESTE_FILES}/noveye.cfg" "${OPT_ETC}/noveye.cfg"
+else
+    log "${OPT_ETC}/noveye.cfg already up to date, nothing to deploy."
 fi
-
-log "Deploying config to ${OPT_ETC}/noveye.cfg..."
-sudo cp "${CELESTE_FILES}/noveye.cfg" "${OPT_ETC}/noveye.cfg"
 
 log "Done. Launch with:"
 log "  ~/dev/scripts/celeste/dev-build.sh -l -f ${OPT_ETC}/noveye.cfg"
