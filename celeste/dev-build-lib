@@ -10,6 +10,7 @@ show_makefile_targets()
     local makefile="${PROJECT_ROOT}/Makefile"
     if [[ ! -f "$makefile" ]]; then
         error "No Makefile found at ${makefile}"
+        return 1
     fi
 
     declare -A descriptions=(
@@ -48,18 +49,27 @@ ensure_host_writable()
     # root-owned on the host. Any host build/install step touching those same paths
     # afterward then fails with "Permission denied" instead of a clear message.
     # Only actually prompts for sudo when something is really root-owned.
+    #
+    # Checked recursively, not just the top-level dir: Docker can create build/ or
+    # deps/ once as the current user, then later write individual files/subdirs
+    # inside as root on a later run (e.g. build/.cmake/api/v1/reply/*.json) --
+    # a top-level-only check misses those, and `rm -rf` then fails partway through
+    # with a wall of "Permission denied" instead of ever prompting for sudo.
     local dirs=("${PROJECT_ROOT}/deps" "${PROJECT_ROOT}/build")
-    local needs_fix=false
+    local to_fix=()
 
     for d in "${dirs[@]}"; do
-        if [[ -e "$d" ]] && [[ "$(stat -c '%U' "$d")" != "$(whoami)" ]]; then
-            needs_fix=true
+        # Only ever chown a dir that actually exists -- passing a missing path to
+        # chown alongside a real one aborts the whole command (non-zero exit) before
+        # it gets to fix the real one, since set -e then kills the script right there.
+        if [[ -e "$d" ]] && [[ -n "$(find "$d" ! -user "$(whoami)" -print -quit)" ]]; then
+            to_fix+=("$d")
         fi
     done
 
-    if [[ "$needs_fix" == true ]]; then
-        warn "deps/ and/or build/ are root-owned (leftover from a Docker run) -- fixing ownership before the host build..."
-        sudo chown -R "$(whoami):$(whoami)" "${dirs[@]}"
+    if [[ "${#to_fix[@]}" -gt 0 ]]; then
+        warn "$(IFS=', '; echo "${to_fix[*]}") root-owned (leftover from a Docker run) -- fixing ownership before the host build..."
+        sudo chown -R "$(whoami):$(whoami)" "${to_fix[@]}"
     fi
 }
 
@@ -128,12 +138,17 @@ configure_and_build_host()
         COV_FLAG="-DENABLE_COVERAGE=ON"
     fi
 
-    # Dynamically find toolchain to survive the 'relwithdebinfo' vs 'RelWithDebInfo' mess
-    local TOOLCHAIN_FILE=$(find "${PROJECT_ROOT}/back_end" -name "conan_toolchain.cmake" | head -n 1)
+    # Dynamically find toolchain to survive the 'relwithdebinfo' vs 'RelWithDebInfo' mess.
+    # celeste's --setup-clion (build.sh, unmodified/matching main) runs a bare
+    # `conan install .` with no --output-folder, so the toolchain lands at the repo-root
+    # build/ dir, NOT under back_end/ -- search both so this also still works if
+    # --setup-clion is ever run with an --output-folder override.
+    local TOOLCHAIN_FILE=$(find "${PROJECT_ROOT}/build" "${PROJECT_ROOT}/back_end" -name "conan_toolchain.cmake" 2>/dev/null | head -n 1)
     
     if [ -z "$TOOLCHAIN_FILE" ]
     then
-        error "Conan toolchain not found! Run conan install on host."
+        error "Conan toolchain not found! Run './build.sh --setup-clion' on host."
+        return 1
     fi
 
     log "Using Toolchain: ${TOOLCHAIN_FILE}"
@@ -203,23 +218,29 @@ launch_celeste_host()
     if [ "$USE_AI_CFG" = true ]; then
         CFG="${PROJECT_ROOT}/noveye-local-novai.cfg"
     fi
+    if [ -n "$CUSTOM_CFG" ]; then
+        CFG="$CUSTOM_CFG"
+    fi
 
     if [[ ! -f "${BUILD_DIR}/celeste" ]]; then
         error "Binary not found at ${BUILD_DIR}/celeste. Build first (-r or configure_and_build_host)."
+        return 1
     fi
     if [[ ! -f "$CFG" ]]; then
         error "Configuration file not found at ${CFG}"
+        return 1
     fi
 
     link_host_plugins
     export LD_LIBRARY_PATH="${BUILD_DIR}:${LD_LIBRARY_PATH}"
-    log "Launching celeste with config: $(basename "$CFG")"
+    log "Launching celeste with config: ${CFG}"
     echo "------------------------------------------------"
 
     # celeste resolves its second arg (bare config filename) against its first
-    # (project root) -- mirrors celeste's own build.sh dev-run.
+    # (the config's own directory, not necessarily PROJECT_ROOT -- -f can point
+    # anywhere, e.g. /opt/novarc/apps/celeste/etc/noveye.cfg).
     pushd "${BUILD_DIR}" > /dev/null
-    "./celeste" "${PROJECT_ROOT}/" "$(basename "$CFG")"
+    "./celeste" "$(dirname "$CFG")/" "$(basename "$CFG")"
     popd > /dev/null
 }
 

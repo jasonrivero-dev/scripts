@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-# Safely load token
 TOKEN_FILE="$HOME/dev/scripts/jiracli/token"
 if [[ -f "$TOKEN_FILE" ]]; then
   export JIRA_API_TOKEN=$(cat "$TOKEN_FILE")
@@ -13,13 +12,12 @@ PLAIN=""
 COMMENTS=3
 
 usage() {
-  echo "Usage: $(basename "$0") [-p] [-c comments_count] <ISSUE-KEY>"
-  echo "  -p         Output plain text to stdout (ideal for grep/piping)"
+  echo "Usage: $(basename "$0") [-p] [-c comments_count] <ISSUE-KEY> [ISSUE-KEY...]"
+  echo "  -p         Output plain text to stdout"
   echo "  -c NUM     Number of comments to fetch (default: 3)"
   exit 1
 }
 
-# Parse options
 while getopts "pc:h" opt; do
   case $opt in
     p) PLAIN="--plain" ;;
@@ -30,16 +28,25 @@ while getopts "pc:h" opt; do
 done
 shift $((OPTIND -1))
 
-ISSUE_KEY="$1"
-
-if [[ -z "$ISSUE_KEY" ]]; then
+if [[ $# -eq 0 ]]; then
   usage
 fi
 
-CMD=("jira" "issue" "view" "$ISSUE_KEY" "--comments" "$COMMENTS")
+TOTAL_TICKETS=$#
 
-if [[ -n "$PLAIN" ]]; then
-  CMD+=("$PLAIN")
-fi
+for ISSUE_KEY in "$@"; do
+  if [[ $TOTAL_TICKETS -gt 1 ]]; then
+    echo "================================================================================"
+    echo "ISSUE: $ISSUE_KEY"
+    echo "================================================================================"
+  fi
 
-"${CMD[@]}"
+  CMD=("jira" "issue" "view" "$ISSUE_KEY" "--comments" "$COMMENTS")
+
+  if [[ -n "$PLAIN" ]]; then
+    CMD+=("$PLAIN")
+  fi
+
+  "${CMD[@]}"
+  echo ""
+done
