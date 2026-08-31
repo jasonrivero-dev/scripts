@@ -40,3 +40,5 @@ ninja celeste
 # Return to root and execute the run script
 cd ~/dev/celeste
 ./build.sh dev-run
+
+ln -sf "$(realpath libffmpeg_recorder.so)" ~/dev/celeste/celeste_extensions/plugins/libffmpeg_recorder.so

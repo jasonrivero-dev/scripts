@@ -1,0 +1,28 @@
+diff --git a/back_end/test/CMakeLists.txt b/back_end/test/CMakeLists.txt
+index 4b7f02de..78bfa7f7 100644
+--- a/back_end/test/CMakeLists.txt
++++ b/back_end/test/CMakeLists.txt
+@@ -76,6 +76,23 @@ target_include_directories(recorder_tests PUBLIC
+ 
+ set_target_properties(recorder_tests PROPERTIES ENABLE_EXPORTS ON)
+ 
++# Manual GPU-box verification tool for SW-3035 (see crash_repro.sh) -- not a Catch2 binary,
++# not registered with catch_discover_tests, not run in CI (no GPU there).
++add_executable(crash_repro_helper
++    integration/crash_repro_helper.cpp
++)
++
++target_link_libraries(crash_repro_helper PRIVATE
++    nov_core
++)
++
++target_include_directories(crash_repro_helper PUBLIC
++    ${PROJECT_SOURCE_DIR}/back_end/core/include
++    ${PROJECT_SOURCE_DIR}/back_end/util/include
++)
++
++set_target_properties(crash_repro_helper PROPERTIES ENABLE_EXPORTS ON)
++
+ add_subdirectory(util)
+ 
+ catch_discover_tests(tests)

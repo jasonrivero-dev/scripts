@@ -1,0 +1,300 @@
+# dev-build-lib: Surgical Host-side Functions for Celeste
+
+show_makefile_targets()
+{
+    # celeste's repo-root Makefile has no self-documenting `## comment` convention, so
+    # this can't just be extracted automatically -- it's a hand-written explanation of
+    # what each target does and how they chain, kept next to a live grep of the actual
+    # target names so a target we haven't described yet still shows up (not silently
+    # dropped) if the Makefile changes without this list being updated.
+    local makefile="${PROJECT_ROOT}/Makefile"
+    if [[ ! -f "$makefile" ]]; then
+        error "No Makefile found at ${makefile}"
+    fi
+
+    declare -A descriptions=(
+        [all]="Default entrypoint (clean, build, copy_libs). What a plain 'make' runs."
+        [clean]="Wipes deps/, build/, third/ INSIDE THE CONTAINER. Destructive -- forces a full redownload/rebuild."
+        [copy_deps]="Copies the container's own deps/ and build/ onto the host-mounted paths, plus celeste_infra_dist. KNOWN BUG: cp -r nests instead of overwriting if the host destination already has content from a prior host build -- see dev-build.sh -d, which works around this."
+        [generate]="copy_deps, then configures the real (non-coverage) CMake build."
+        [generate_test]="Same as generate, with -DBUILD_WITH_COVERAGE=ON. What 'test' configures against."
+        [build]="generate, then compiles just the 'celeste' target."
+        [test]="generate_test, builds tests/recorder_tests/test_learning_logger, then runs all three. This is what './build.sh test' drives inside Docker."
+        [config-fast]="Configures reusing an existing conan_toolchain.cmake if present (skips regenerating it) -- faster than generate/generate_test for iterating."
+        [test-unit]="config-fast, then builds+runs just 'tests' (not recorder_tests) with coverage OFF. Fastest local loop; not used by CI."
+        [config-cov]="Configures a coverage-instrumented build directly. Only ever called by coverage-run, not meant to run standalone."
+        [coverage-run]="Zeroes lcov counters, config-cov, builds tests/recorder_tests/ffmpeg_recorder, runs 'tests' instrumented."
+        [coverage-report]="Turns the .gcda data coverage-run produced into an lcov HTML report + summary."
+        [coverage]="coverage-run then coverage-report chained -- the full CI coverage pipeline."
+        [copy_libs]="Copies ~100 runtime .so files (OpenCV, libtorch, ffmpeg, HDF5, etc.) into build/ so built binaries find them via \$ORIGIN rpath at runtime. Long and Ubuntu-version-gated -- see the 22.04-vs-24.04 comments inside the Makefile itself."
+    )
+
+    local targets
+    targets=$(grep -E '^[a-zA-Z][a-zA-Z0-9_-]*:' "$makefile" | grep -v '^\.PHONY' | cut -d: -f1 | sort -u)
+
+    log "Makefile targets in ${makefile}:"
+    echo
+    while IFS= read -r t; do
+        printf "  %-16s %s\n" "$t" "${descriptions[$t]:-(no description recorded here -- check the Makefile directly)}"
+    done <<< "$targets"
+    echo
+    log "Call graph: all -> clean, build, copy_libs  |  build -> generate -> copy_deps  |  test -> generate_test -> copy_deps  |  test-unit -> config-fast  |  coverage -> coverage-run (-> config-cov) + coverage-report"
+}
+
+ensure_host_writable()
+{
+    # Docker runs as root and bind-mounts the repo, so anything its Makefile/build.sh
+    # writes to deps/ or build/ (fresh dirs, or files inside existing ones) lands
+    # root-owned on the host. Any host build/install step touching those same paths
+    # afterward then fails with "Permission denied" instead of a clear message.
+    # Only actually prompts for sudo when something is really root-owned.
+    local dirs=("${PROJECT_ROOT}/deps" "${PROJECT_ROOT}/build")
+    local needs_fix=false
+
+    for d in "${dirs[@]}"; do
+        if [[ -e "$d" ]] && [[ "$(stat -c '%U' "$d")" != "$(whoami)" ]]; then
+            needs_fix=true
+        fi
+    done
+
+    if [[ "$needs_fix" == true ]]; then
+        warn "deps/ and/or build/ are root-owned (leftover from a Docker run) -- fixing ownership before the host build..."
+        sudo chown -R "$(whoami):$(whoami)" "${dirs[@]}"
+    fi
+}
+
+clean_stale_dep_builds()
+{
+    # Some dev scripts (e.g. myceleste.sh) configure third/metrics-cpp in-source (`cmake .`
+    # instead of `-B build/`), leaving CMakeCache.txt etc. sitting directly in the checkout.
+    # Docker's build then COPYs that straight into the image, and its own out-of-source
+    # `mkdir build` step doesn't touch those in-source leftovers -- CMake sees two different
+    # source/build directories claiming the same cache and aborts.
+    #
+    # This ONLY removes that specific in-source-configure pattern (CMakeCache.txt and its
+    # usual companions, sitting directly beside a tracked CMakeLists.txt). It deliberately
+    # does NOT do a blanket `git clean` of a dependency's checkout -- that also destroys
+    # legitimate untracked build state (out-of-source build/ dirs, generated headers,
+    # Docker staging dirs) that some deps' own build scripts intentionally leave in place.
+    local artifacts=(CMakeCache.txt CMakeFiles Makefile cmake_install.cmake install_manifest.txt)
+    local removed_any=false
+
+    while IFS= read -r -d '' cmakelists; do
+        local dep_dir
+        dep_dir=$(dirname "$cmakelists")
+        for artifact in "${artifacts[@]}"; do
+            if [[ -e "${dep_dir}/${artifact}" ]]; then
+                log "Removing stale in-source CMake artifact: ${dep_dir}/${artifact}"
+                rm -rf "${dep_dir:?}/${artifact}"
+                removed_any=true
+            fi
+        done
+    done < <(find "${PROJECT_ROOT}/third" -mindepth 2 -name CMakeLists.txt \
+                -not -path "*/build/*" -not -path "*/build-*/*" \
+                -not -path "*/build_container/*" -not -path "*/docker-dirs/*" \
+                -not -path "*/cmake-build-*/*" -print0)
+
+    if [[ "$removed_any" == false ]]; then
+        log "No stale in-source CMake artifacts found."
+    fi
+}
+
+clean_host_build()
+{
+    log "Surgical Clean: Removing host-specific artifacts..."
+    rm -rfv "${BUILD_DIR}"
+    rm -rfv "${PROJECT_ROOT}/back_end/libs/ffmpeg_recorder/build"
+}
+
+rebuild_metrics_host()
+{
+    log "Rebuilding Metrics (Host-side Clean Start)..."
+    pushd "${PROJECT_ROOT}/third/metrics-cpp" > /dev/null
+    rm -rf build_host
+    mkdir -p build_host
+    cmake -S . -B build_host -DCMAKE_INSTALL_PREFIX="${PROJECT_ROOT}/deps/metrics-cpp"
+    cmake --build build_host --target metrics --config "$BUILD_CONFIG"
+    cmake --install build_host
+    popd > /dev/null
+}
+
+configure_and_build_host()
+{
+    log "Configuring Host CMake (Coverage: ${ENABLE_COV})..."
+    
+    local COV_FLAG="-DENABLE_COVERAGE=OFF"
+    if [ "$ENABLE_COV" = true ]
+    then
+        COV_FLAG="-DENABLE_COVERAGE=ON"
+    fi
+
+    # Dynamically find toolchain to survive the 'relwithdebinfo' vs 'RelWithDebInfo' mess
+    local TOOLCHAIN_FILE=$(find "${PROJECT_ROOT}/back_end" -name "conan_toolchain.cmake" | head -n 1)
+    
+    if [ -z "$TOOLCHAIN_FILE" ]
+    then
+        error "Conan toolchain not found! Run conan install on host."
+    fi
+
+    log "Using Toolchain: ${TOOLCHAIN_FILE}"
+    mkdir -p "${BUILD_DIR}"
+    
+    cmake -G Ninja \
+        ${COV_FLAG} \
+        -DCMAKE_CXX_FLAGS="-fprofile-update=atomic" \
+        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
+        -DCMAKE_BUILD_TYPE="${BUILD_CONFIG}" \
+        -DCMAKE_PREFIX_PATH="${PROJECT_ROOT}/deps/libtorch" \
+        -DCMAKE_LIBRARY_PATH="${PROJECT_ROOT}/build" \
+        -DCMAKE_CUDA_COMPILER=/usr/bin/nvcc \
+        -S "${PROJECT_ROOT}/back_end" -B "${BUILD_DIR}"
+
+    local TARGETS="celeste"
+    if [ "$RUN_TESTS" = true ] || [ "$ENABLE_COV" = true ]
+    then
+        TARGETS="celeste tests recorder_tests ffmpeg_recorder"
+    fi
+
+    log "Executing Host Ninja (Targets: ${TARGETS})..."
+    ninja -C "${BUILD_DIR}" ${TARGETS}
+}
+
+link_host_plugins()
+{
+    # celeste's own build.sh points celeste_extensions/plugins/libffmpeg_recorder.so at
+    # repo-root build/ (Docker's build dir, different ABI) -- fine for Docker, wrong for
+    # any host binary (recorder_tests, celeste itself) that dlopens the recorder plugin
+    # by scanning celeste_extensions/plugins/ rather than via LD_LIBRARY_PATH. We manage
+    # our own copy of this link here instead of relying on (or changing) build.sh.
+    mkdir -p "${PROJECT_ROOT}/celeste_extensions/plugins"
+    rm -f "${PROJECT_ROOT}/celeste_extensions/plugins/libffmpeg_recorder.so"
+    ln -s "${BUILD_DIR}/libffmpeg_recorder.so" "${PROJECT_ROOT}/celeste_extensions/plugins/libffmpeg_recorder.so"
+
+    # RecorderTests.cpp's GetPluginBinDirOverride() climbs from CWD looking specifically
+    # for a bare plugins/libffmpeg_recorder.so (not celeste_extensions/plugins/) -- this
+    # is normally only populated by celeste's Docker build path, so on a host-only
+    # workflow it's stale or missing. Manage it here too so host test runs don't pick up
+    # a leftover Docker-ABI copy from a previous ./build.sh test run.
+    mkdir -p "${PROJECT_ROOT}/plugins"
+    rm -f "${PROJECT_ROOT}/plugins/libffmpeg_recorder.so"
+    ln -s "${BUILD_DIR}/libffmpeg_recorder.so" "${PROJECT_ROOT}/plugins/libffmpeg_recorder.so"
+
+    local infra_so="${PROJECT_ROOT}/third/celeste_infra/build/celeste_infra_cpp/libceleste_infra.so"
+    if [[ -f "$infra_so" ]]; then
+        rm -f "${PROJECT_ROOT}/celeste_extensions/plugins/libceleste_infra.so"
+        ln -s "$infra_so" "${PROJECT_ROOT}/celeste_extensions/plugins/libceleste_infra.so"
+    fi
+}
+
+run_tests_host()
+{
+    log "Executing Host Unit Tests..."
+    link_host_plugins
+    export LD_LIBRARY_PATH="${BUILD_DIR}:${LD_LIBRARY_PATH}"
+
+    # Both binaries land under test/, not the build root.
+    "${BUILD_DIR}/test/tests"
+    "${BUILD_DIR}/test/recorder_tests"
+}
+
+launch_celeste_host()
+{
+    local CFG="${PROJECT_ROOT}/noveye-local-main.cfg"
+    if [ "$USE_AI_CFG" = true ]; then
+        CFG="${PROJECT_ROOT}/noveye-local-novai.cfg"
+    fi
+
+    if [[ ! -f "${BUILD_DIR}/celeste" ]]; then
+        error "Binary not found at ${BUILD_DIR}/celeste. Build first (-r or configure_and_build_host)."
+    fi
+    if [[ ! -f "$CFG" ]]; then
+        error "Configuration file not found at ${CFG}"
+    fi
+
+    link_host_plugins
+    export LD_LIBRARY_PATH="${BUILD_DIR}:${LD_LIBRARY_PATH}"
+    log "Launching celeste with config: $(basename "$CFG")"
+    echo "------------------------------------------------"
+
+    # celeste resolves its second arg (bare config filename) against its first
+    # (project root) -- mirrors celeste's own build.sh dev-run.
+    pushd "${BUILD_DIR}" > /dev/null
+    "./celeste" "${PROJECT_ROOT}/" "$(basename "$CFG")"
+    popd > /dev/null
+}
+
+run_docker_test_host()
+{
+    # Docker's lcov step hard-fails (geninfo: ERROR, not a warning) if it scans a host
+    # build dir's .gcno files -- host gcov's version format isn't what the container's
+    # older gcov expects. celeste's own build.sh no longer excludes/tolerates this (by
+    # request, to keep that script untouched), so we clear our host build dirs first.
+    # Costs a full host rebuild afterward; that's the tradeoff for not touching build.sh.
+    warn "Clearing host build dirs before Docker test -- next host build starts from scratch."
+    rm -rf "${PROJECT_ROOT}"/back_end/cmake-build-*
+
+    # celeste's repo-root Makefile's copy_deps does `cp -r /deps $(DEPS_DIR)`. `cp -r`
+    # nests instead of merging/overwriting whenever DEPS_DIR already exists as a non-empty
+    # directory -- this triggers on deps/ existing at all, regardless of which subfolder
+    # is stale. Removing only deps/metrics-cpp does NOT prevent the nest (deps/ itself
+    # still exists), it just means the container's rebuilt copy lands at the wrong nested
+    # path (deps/deps/metrics-cpp) instead of overwriting deps/metrics-cpp -- CMake then
+    # can't find it at all. The only reliable fix is removing deps/ entirely so cp -r
+    # creates it fresh. Costs re-downloading deps/libtorch on the next --setup-clion.
+    # Same nesting exposure applies to repo-root build/ (`cp -r /build $(BUILD_DIR)`).
+    rm -rf "${PROJECT_ROOT}/deps" "${PROJECT_ROOT}/build"
+
+    pushd "${PROJECT_ROOT}" > /dev/null
+    ./build.sh test
+    local result=$?
+    popd > /dev/null
+    return $result
+}
+
+process_coverage_host()
+{
+    log "Aligning Host Coverage with Docker Standards..."
+    local INFO_RAW="${PROJECT_ROOT}/coverage_raw.info"
+    local INFO_FILE="${PROJECT_ROOT}/coverage.info"
+    local REPORT_DIR="${PROJECT_ROOT}/reports/host_coverage_report"
+
+    # 1. Capture with Base Anchor
+    # Anchoring to back_end ensures relative paths match the Docker report
+    lcov --capture \
+         --directory "${BUILD_DIR}" \
+         --base-directory "${PROJECT_ROOT}/back_end" \
+         --output-file "${INFO_RAW}" \
+         --ignore-errors mismatch,source,gcov
+
+    # 2. Extract Only Project Source
+    # Mirrors the Docker 'extract' phase to eliminate external hits
+    lcov --extract "${INFO_RAW}" "${PROJECT_ROOT}/back_end/*" \
+         --output-file "${INFO_FILE}" \
+         --ignore-errors unused,source
+
+    # 3. Comprehensive Filtering
+    # Merged filter set from build.sh and Makefile
+    lcov --remove "${INFO_FILE}" \
+         '/usr/*' \
+         '*/deps/*' \
+         '*/third/*' \
+         '*/test/*' \
+         '*/tests/*' \
+         '*/fbs/*' \
+         '*/_deps/*' \
+         '*/.conan2/*' \
+         '*/cmake-build-*' \
+         -o "${INFO_FILE}" \
+         --quiet \
+         --ignore-errors unused
+
+    # 4. Generate Report
+    rm -rf "${REPORT_DIR}"
+    mkdir -p "${REPORT_DIR}"
+    genhtml "${INFO_FILE}" \
+            --output-directory "${REPORT_DIR}" \
+            --ignore-errors source,unused \
+            --quiet
+    
+    log "Host Alignment Complete: ${REPORT_DIR}/index.html"
+}
