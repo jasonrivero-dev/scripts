@@ -29,11 +29,9 @@ CUSTOM_CFG=""
 DOCKER_TEST=false
 BUILD_TARGET="celeste"
 SUCCESS=false # Tracker for the summary
-# Lowercased: celeste's own build.sh/CMake always name the dir this way regardless of
-# the build type's actual casing (cmake-build-relwithdebinfo, not -RelWithDebInfo) --
-# using the mixed-case form here silently builds into a second, unrelated directory.
-BUILD_DIR="${PROJECT_ROOT}/back_end/cmake-build-${BUILD_CONFIG,,}"
 REPORT_DIR="${PROJECT_ROOT}/reports/host_coverage_report"
+# BUILD_DIR itself is set after argument parsing below (it depends on
+# BUILD_CONFIG, which -t/--target can override) -- see the comment there.
 
 # --- 2. Summary Trap ---
 finish()
@@ -212,6 +210,14 @@ do
     esac
     shift
 done
+
+# Set only now that BUILD_CONFIG has its final value (-t/--target may have
+# overridden the default above) -- computing this earlier meant -t silently
+# had no effect on where the build actually landed.
+# Lowercased: celeste's own build.sh/CMake always name the dir this way regardless of
+# the build type's actual casing (cmake-build-relwithdebinfo, not -RelWithDebInfo) --
+# using the mixed-case form here silently builds into a second, unrelated directory.
+BUILD_DIR="${PROJECT_ROOT}/back_end/cmake-build-${BUILD_CONFIG,,}"
 
 # --- 4. Chained Execution Pipeline ---
 
