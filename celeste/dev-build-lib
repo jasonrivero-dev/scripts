@@ -212,6 +212,31 @@ run_tests_host()
     "${BUILD_DIR}/test/recorder_tests"
 }
 
+prepare_vscode_debug()
+{
+    # Everything VS Code's launch.json/tasks.json need to work: celeste's own
+    # host setup, then both build trees the debug configs point at
+    # (cmake-build-relwithdebinfo for normal runs, cmake-build-debug for
+    # reliable stepping). Built entirely out of the same functions -r and
+    # -t Debug -r already use -- see those flags for the individual pieces.
+    log "Preparing full VS Code debug environment: --setup-clion, then both RelWithDebInfo and Debug trees..."
+
+    pushd "${PROJECT_ROOT}" > /dev/null
+    ./build.sh --setup-clion
+    popd > /dev/null
+
+    for cfg in RelWithDebInfo Debug; do
+        BUILD_CONFIG="$cfg"
+        BUILD_DIR="${PROJECT_ROOT}/back_end/cmake-build-${BUILD_CONFIG,,}"
+        BUILD_TARGET="celeste tests recorder_tests ffmpeg_recorder"
+        log "Building and testing the ${BUILD_CONFIG} tree at ${BUILD_DIR}..."
+        configure_and_build_host
+        run_tests_host
+    done
+
+    log "VS Code debug environment ready: cmake-build-relwithdebinfo and cmake-build-debug both built and tested."
+}
+
 launch_celeste_host()
 {
     local CFG="${PROJECT_ROOT}/noveye-local-main.cfg"

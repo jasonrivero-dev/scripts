@@ -27,6 +27,7 @@ LAUNCH_CELESTE=false
 USE_AI_CFG=false
 CUSTOM_CFG=""
 DOCKER_TEST=false
+PREPARE_DEBUG=false
 BUILD_TARGET="celeste"
 SUCCESS=false # Tracker for the summary
 REPORT_DIR="${PROJECT_ROOT}/reports/host_coverage_report"
@@ -64,6 +65,9 @@ show_help()
     echo "  -d,  --docker-test  Clear host build dirs, then run celeste's ./build.sh test"
     echo "                   (host cmake-build-* dirs make Docker's lcov step hard-fail on"
     echo "                   gcov version mismatch -- see build.sh's git history for why)"
+    echo "  -pd, --prepare-debug  Full VS Code debug setup: --setup-clion, then build+test"
+    echo "                   both the RelWithDebInfo and Debug trees. Use after -d, or any"
+    echo "                   time cmake-build-relwithdebinfo/cmake-build-debug are missing."
     echo "  -t,  --target    Build config (default: RelWithDebInfo)"
     echo "  -mt, --makefile-targets  Explain celeste's repo-root Makefile targets"
     echo "  -hh, --help-long Full story: setup, every flag, gotchas, typical workflows"
@@ -110,6 +114,11 @@ EVERY FLAG
               /opt/novarc/apps/celeste/etc/noveye.cfg). Never touches celeste's
               own tracked config files.
   -d          Run celeste's own Docker `./build.sh test`, safely (see below).
+  -pd         Full VS Code debug setup: --setup-clion, then -r-equivalent builds
+              of both the RelWithDebInfo and Debug trees (built out of the same
+              configure_and_build_host()/run_tests_host() -r and -t Debug -r use).
+              Reach for this after -d, or whenever cmake-build-relwithdebinfo/
+              cmake-build-debug are both missing/stale.
   -mt         Explain celeste's Makefile targets (it has no self-documentation).
   -cd         Clean stale in-source CMake artifacts under third/* (e.g. a
               `cmake .` run by myceleste.sh leaving CMakeCache.txt beside a
@@ -131,7 +140,8 @@ GOTCHAS DISCOVERED BUILDING THIS (so you don't have to rediscover them)
    deps/metrics-cpp alone) makes it WORSE -- the nest still happens, it just
    relocates the rebuilt copy to the wrong nested path instead of fixing the
    mismatch. Consequence: after -d, you MUST re-run `./build.sh --setup-clion`
-   before -r/-l will work again.
+   before -r/-l will work again -- or just run -pd, which does exactly that
+   plus rebuilds both host trees (RelWithDebInfo and Debug) in one go.
 
 2. deps/ and repo-root build/ periodically end up root-owned. Docker runs as
    root and bind-mounts the repo, so anything it writes there lands
@@ -156,11 +166,11 @@ TYPICAL WORKFLOWS
 # See it actually run (main config; add -a for NovAI)
 ~/dev/scripts/celeste/dev-build.sh -l
 
-# Full CI-equivalent Docker suite -- -d wipes the host build dir/deps/build, so
-# --setup-clion has to regenerate the conan toolchain before -r works again
+# Full CI-equivalent Docker suite -- -d wipes the host build dir/deps/build entirely
 ~/dev/scripts/celeste/dev-build.sh -d
-cd ~/dev/celeste && ./build.sh --setup-clion
-~/dev/scripts/celeste/dev-build.sh -r
+# -pd restores everything -d just wiped: --setup-clion, then both host build
+# trees (needed for VS Code debugging too, not just -r/-l)
+~/dev/scripts/celeste/dev-build.sh -pd
 
 # Verify SW-3035 crash-resilience on real GPU (forced kill -9 mid-recording)
 ~/dev/scripts/FFMpegCrash/run.sh
@@ -205,6 +215,7 @@ do
         -a|--ai)        USE_AI_CFG=true ;;
         -f|--cfg)       CUSTOM_CFG="$2"; shift ;;
         -d|--docker-test) DOCKER_TEST=true ;;
+        -pd|--prepare-debug) PREPARE_DEBUG=true ;;
         -t|--target)    BUILD_CONFIG="$2"; shift ;;
         *) warn "Unknown parameter: $1" ;;
     esac
@@ -246,6 +257,8 @@ if [ "$ENABLE_COV" = true ] && [ "$RUN_TESTS" = true ]; then process_coverage_ho
 if [ "$LAUNCH_CELESTE" = true ]; then launch_celeste_host; fi
 
 if [ "$DOCKER_TEST" = true ]; then run_docker_test_host; fi
+
+if [ "$PREPARE_DEBUG" = true ]; then prepare_vscode_debug; fi
 
 SUCCESS=true # Set to true only if all stages pass
 exit 0
