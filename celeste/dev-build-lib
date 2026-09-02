@@ -156,6 +156,7 @@ configure_and_build_host()
     
     cmake -G Ninja \
         ${COV_FLAG} \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
         -DCMAKE_CXX_FLAGS="-fprofile-update=atomic" \
         -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
         -DCMAKE_BUILD_TYPE="${BUILD_CONFIG}" \
@@ -172,6 +173,27 @@ configure_and_build_host()
 
     log "Executing Host Ninja (Targets: ${TARGETS})..."
     ninja -C "${BUILD_DIR}" ${TARGETS}
+
+    generate_ide_compile_commands
+}
+
+# VS Code's C/C++ extension can't parse the -include cmake_pch.hxx forced
+# include most of this codebase's targets use for precompiled headers -- it
+# silently drops the whole translation unit's flags when it hits that, so
+# most files show phantom "cannot open source file" errors. Strip just that
+# flag into a separate copy for the IDE only; the real build (ninja, above)
+# is untouched.
+generate_ide_compile_commands()
+{
+    local SRC="${BUILD_DIR}/compile_commands.json"
+    local DEST="${PROJECT_ROOT}/.vscode/compile_commands.json"
+
+    if [ ! -f "$SRC" ]; then
+        return 0
+    fi
+
+    mkdir -p "${PROJECT_ROOT}/.vscode"
+    jq '[.[] | .command |= gsub(" -include [^ ]+"; "")]' "$SRC" > "$DEST"
 }
 
 link_host_plugins()
