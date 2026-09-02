@@ -58,7 +58,11 @@ show_help()
     echo "  -cd, --clean-deps Remove stale in-source CMake artifacts from third/*"
     echo "  -m,  --metrics   Rebuild metrics library"
     echo "  -c,  --coverage  Enable code coverage (CMake)"
-    echo "  -r,  --run       Execute unit tests"
+    echo "  -r,  --run       Reconfigure (CMake) + build + run unit tests. Also the fix for"
+    echo "                   'undefined reference'/link errors after adding, removing, or"
+    echo "                   renaming a .cpp file -- most CMakeLists here use file(GLOB ...)"
+    echo "                   without CONFIGURE_DEPENDS, so plain ninja/F5 won't notice until"
+    echo "                   this re-runs. Combine with -t Debug for the tree F5 builds."
     echo "  -l,  --launch    Launch celeste (main config; combine with -a for NovAI)"
     echo "  -a,  --ai        Use the NovAI config with -l"
     echo "  -f,  --cfg <path>  Launch (-l) against an arbitrary config file instead"
@@ -107,7 +111,11 @@ under back_end/. configure_and_build_host() (-r/-c) searches both locations.
 
 EVERY FLAG
 
-  -r          Build celeste + tests + recorder_tests, run them.
+  -r          Reconfigure (CMake) + build celeste + tests + recorder_tests, run them.
+              Reconfigure is the part that matters after adding/removing/renaming a
+              .cpp file anywhere under a file(GLOB ...) CMakeLists (most of them) --
+              plain ninja (what F5 runs) won't see the change until this runs. Not
+              just "run tests" despite the name.
   -l  (-a)    Launch celeste (main config; -a for the NovAI config).
   -f <path>   With -l, launch against an arbitrary config file instead of the
               repo's noveye-local-*.cfg (e.g. one set up by celeste-setup.sh at
