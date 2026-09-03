@@ -44,24 +44,12 @@ show_makefile_targets()
 
 ensure_host_writable()
 {
-    # Docker runs as root and bind-mounts the repo, so anything its Makefile/build.sh
-    # writes to deps/ or build/ (fresh dirs, or files inside existing ones) lands
-    # root-owned on the host. Any host build/install step touching those same paths
-    # afterward then fails with "Permission denied" instead of a clear message.
-    # Only actually prompts for sudo when something is really root-owned.
-    #
-    # Checked recursively, not just the top-level dir: Docker can create build/ or
-    # deps/ once as the current user, then later write individual files/subdirs
-    # inside as root on a later run (e.g. build/.cmake/api/v1/reply/*.json) --
-    # a top-level-only check misses those, and `rm -rf` then fails partway through
-    # with a wall of "Permission denied" instead of ever prompting for sudo.
-    local dirs=("${PROJECT_ROOT}/deps" "${PROJECT_ROOT}/build")
+    # Docker runs as root, so build/install steps under deps/, build/, third/ can
+    # come back root-owned. Only prompts for sudo when something really is.
+    local dirs=("${PROJECT_ROOT}/deps" "${PROJECT_ROOT}/build" "${PROJECT_ROOT}/third")
     local to_fix=()
 
     for d in "${dirs[@]}"; do
-        # Only ever chown a dir that actually exists -- passing a missing path to
-        # chown alongside a real one aborts the whole command (non-zero exit) before
-        # it gets to fix the real one, since set -e then kills the script right there.
         if [[ -e "$d" ]] && [[ -n "$(find "$d" ! -user "$(whoami)" -print -quit)" ]]; then
             to_fix+=("$d")
         fi
