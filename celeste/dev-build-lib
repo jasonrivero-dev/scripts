@@ -307,6 +307,20 @@ run_docker_test_host()
     return $result
 }
 
+package_celeste_host()
+{
+    # build/VERSION is normally written by CI (build-and-test.yaml) right before it
+    # calls build-debs.sh, using a real CI build number. Locally there's no such
+    # number, so this reproduces the same version string with a fixed placeholder
+    # ("0") -- fine for a local/manual package, never used for an actual release.
+    local version
+    version=$(awk -F'"' '/project\(Celeste VERSION/ {print $2}' "${PROJECT_ROOT}/back_end/CMakeLists.txt")
+    echo "export FULL_VERSION=${version}.0" > "${PROJECT_ROOT}/build/VERSION"
+    log "Wrote build/VERSION (FULL_VERSION=${version}.0)"
+
+    "${PROJECT_ROOT}/deb-packaging/build-debs.sh"
+}
+
 process_coverage_host()
 {
     log "Aligning Host Coverage with Docker Standards..."

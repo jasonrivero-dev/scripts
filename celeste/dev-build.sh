@@ -28,6 +28,7 @@ USE_AI_CFG=false
 CUSTOM_CFG=""
 DOCKER_TEST=false
 PREPARE_DEBUG=false
+PACKAGE=false
 BUILD_TARGET="celeste"
 SUCCESS=false # Tracker for the summary
 REPORT_DIR="${PROJECT_ROOT}/reports/host_coverage_report"
@@ -72,6 +73,10 @@ show_help()
     echo "  -pd, --prepare-debug  Full VS Code debug setup: --setup-clion, then build+test"
     echo "                   both the RelWithDebInfo and Debug trees. Use after -d, or any"
     echo "                   time cmake-build-relwithdebinfo/cmake-build-debug are missing."
+    echo "  -p,  --package   Generate build/VERSION (placeholder build number, normally"
+    echo "                   written by CI) and run deb-packaging/build-debs.sh. Requires"
+    echo "                   build/celeste to already exist (a prior ./build.sh Docker run)"
+    echo "                   and a clean git tree (build-debs.sh's own requirement)."
     echo "  -t,  --target    Build config (default: RelWithDebInfo)"
     echo "  -mt, --makefile-targets  Explain celeste's repo-root Makefile targets"
     echo "  -hh, --help-long Full story: setup, every flag, gotchas, typical workflows"
@@ -85,17 +90,6 @@ show_help_long()
     cat <<'EOF'
 dev-build.sh -- host-side build/test/run tooling for celeste (~/dev/celeste)
 =============================================================================
-
-WHY THIS LIVES OUTSIDE THE CELESTE REPO
-
-PR #237 (SW-3035, corrupt MP4 captures) originally bundled real, motivated
-build.sh/Makefile fixes alongside the recording fix itself. Review feedback
-was that changes to shared build tooling "that currently works" for the rest
-of the team don't belong bundled into an unrelated bugfix PR, even when
-there's a genuine bug underneath -- so celeste's build.sh and
-scripts/lib_recorder_dev were reverted to match main exactly, and everything
-this script does reproduces those fixes here instead, scoped to this
-workflow only. We never edit celeste's build.sh/Makefile from here.
 
 FIRST-TIME SETUP (once, or after a full clean)
 
@@ -224,6 +218,7 @@ do
         -f|--cfg)       CUSTOM_CFG="$2"; shift ;;
         -d|--docker-test) DOCKER_TEST=true ;;
         -pd|--prepare-debug) PREPARE_DEBUG=true ;;
+        -p|--package)   PACKAGE=true ;;
         -t|--target)    BUILD_CONFIG="$2"; shift ;;
         *) warn "Unknown parameter: $1" ;;
     esac
@@ -241,6 +236,19 @@ BUILD_DIR="${PROJECT_ROOT}/back_end/cmake-build-${BUILD_CONFIG,,}"
 # --- 4. Chained Execution Pipeline ---
 
 ensure_host_writable
+
+# No action flag at all -- the ownership fix above still ran (harmless,
+# often the actual reason someone runs this bare), but silently falling
+# through to "STATUS: SUCCESS / Target: celeste" below would claim a build
+# happened when nothing did. Show help instead of guessing.
+if [ "$CLEAN_BUILD" = false ] && [ "$CLEAN_DEPS" = false ] && [ "$REBUILD_METRICS" = false ] \
+    && [ "$ENABLE_COV" = false ] && [ "$RUN_TESTS" = false ] && [ "$LAUNCH_CELESTE" = false ] \
+    && [ "$DOCKER_TEST" = false ] && [ "$PREPARE_DEBUG" = false ] && [ "$PACKAGE" = false ]
+then
+    echo "No build/test/launch/package action requested -- ownership check/fix above already ran."
+    echo
+    show_help
+fi
 
 if [ "$CLEAN_BUILD" = true ]; then clean_host_build; fi
 
@@ -267,6 +275,8 @@ if [ "$LAUNCH_CELESTE" = true ]; then launch_celeste_host; fi
 if [ "$DOCKER_TEST" = true ]; then run_docker_test_host; fi
 
 if [ "$PREPARE_DEBUG" = true ]; then prepare_vscode_debug; fi
+
+if [ "$PACKAGE" = true ]; then package_celeste_host; fi
 
 SUCCESS=true # Set to true only if all stages pass
 exit 0
