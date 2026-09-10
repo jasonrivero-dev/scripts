@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^for f in build\\.sh create_dirs\\.sh gen-coverage-html\\.sh gen-coverage\\.sh send_plc_msg\\.py sync_telemetry\\.sh telemetry\\.sh; do printf '\\\\n===== %s =====\\\\n' \"\\$f\"; sed -n '1,240p' \"\\$f\"; done$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
