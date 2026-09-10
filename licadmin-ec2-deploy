@@ -48,22 +48,64 @@ SCRIPTS_TO_COPY=(
 
 print_next_steps() {
     local deb_basename="$1"
-    echo "  ssh -i $KEY_FILE ${REMOTE_USER}@${REMOTE_HOST}"
-    echo "  cd ${REMOTE_DIR}"
-    echo "  sudo apt install ./${deb_basename}   # apt resolves tpm2-tools/acl deps; plain dpkg -i needs 'apt-get install -f' after"
-    echo "  sudo lictl init <license-id>"
-    echo "  scripts/dev_test_e2e"
-    echo "  scripts/qa_test_clients"
+    echo "  1. Connect to the box:"
+    echo "       ssh -i $KEY_FILE ${REMOTE_USER}@${REMOTE_HOST}"
+    echo "  2. Move to the deploy directory:"
+    echo "       cd ${REMOTE_DIR}"
+    echo "  3. Install the package (apt resolves tpm2-tools/acl deps; plain dpkg -i needs 'apt-get install -f' after):"
+    echo "       sudo apt install ./${deb_basename}"
+    echo "  4. Initialize the license:"
+    echo "       sudo lictl init <license-id>"
+    echo "  5. Run the end-to-end test:"
+    echo "       scripts/dev_test_e2e"
+    echo "  6. Run the client tests:"
+    echo "       scripts/qa_test_clients"
+}
+
+do_uninstall() {
+    if [ ! -f "$KEY_FILE" ]; then
+        error "SSH key not found at $KEY_FILE (set KEY_FILE to override)."
+        exit 1
+    fi
+
+    read -r -p "This will purge novarc-licensing and delete ${REMOTE_DIR} on ${REMOTE_HOST}. Continue? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        log "Aborted."
+        exit 0
+    fi
+
+    log "Removing novarc-licensing and ${REMOTE_DIR} from ${REMOTE_USER}@${REMOTE_HOST}..."
+    ssh -t -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" '
+        set -e
+        sudo dpkg --purge novarc-licensing || sudo dpkg --remove --force-remove-reinstreq novarc-licensing
+        sudo apt-get -y --fix-broken install
+        if dpkg -l novarc-licensing 2>/dev/null | grep -qE "^(ii|iU)"; then
+            echo "novarc-licensing is still installed" >&2
+            exit 1
+        fi
+        echo "novarc-licensing removed."
+        rm -rf "'"$REMOTE_DIR"'"
+        echo "Removed deploy directory '"$REMOTE_DIR"'."
+    '
+    log "Uninstall complete."
 }
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-    echo "Usage: licadmin-ec2-deploy"
+    echo "Usage: licadmin-ec2-deploy [--uninstall]"
     echo
     echo "Builds the .deb + example clients, copies them plus the installed-path-safe"
     echo "QA scripts to the EC2 box below. Does not install/provision anything remotely -"
     echo "these are the manual steps to run yourself afterward, over your own SSH session:"
     echo
     print_next_steps "novarc-licensing_<version>_<arch>.deb"
+    echo
+    echo "--uninstall: purges novarc-licensing and deletes ${REMOTE_DIR} on the box above,"
+    echo "             after a y/N confirmation prompt. Connects over SSH and runs it directly."
+    exit 0
+fi
+
+if [ "${1:-}" = "--uninstall" ]; then
+    do_uninstall
     exit 0
 fi
 
