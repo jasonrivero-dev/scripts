@@ -24,6 +24,10 @@ error() {
     echo -e "[$(date +"%H:%M:%S")] [${RED}ERROR${NC}] $*" >&2
 }
 
+divider() {
+    echo "======================================================================"
+}
+
 REPO_DIR="${REPO_DIR:-$HOME/dev/licensing-poc}"
 KEY_FILE="${KEY_FILE:-$HOME/.ec2/Edge-Licensing-Login-Pair.pem}"
 REMOTE_USER="${REMOTE_USER:-ubuntu}"
@@ -52,8 +56,8 @@ print_next_steps() {
     echo "       ssh -i $KEY_FILE ${REMOTE_USER}@${REMOTE_HOST}"
     echo "  2. Move to the deploy directory:"
     echo "       cd ${REMOTE_DIR}"
-    echo "  3. Install the package (apt resolves tpm2-tools/acl deps; plain dpkg -i needs 'apt-get install -f' after):"
-    echo "       sudo apt install ./${deb_basename}"
+    echo "  3. Install the package (ensures acl/tpm2-tools first, then installs):"
+    echo "       sudo ./install.sh ${deb_basename}"
     echo "  4. Initialize the license:"
     echo "       sudo lictl init <license-id>"
     echo "  5. Run the end-to-end test:"
@@ -74,7 +78,10 @@ do_uninstall() {
         exit 0
     fi
 
-    log "Removing novarc-licensing and ${REMOTE_DIR} from ${REMOTE_USER}@${REMOTE_HOST}..."
+    echo
+    divider
+    log "Uninstalling novarc-licensing from ${REMOTE_USER}@${REMOTE_HOST}"
+    divider
     ssh -t -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" '
         set -e
         sudo dpkg --purge novarc-licensing || sudo dpkg --remove --force-remove-reinstreq novarc-licensing
@@ -87,7 +94,9 @@ do_uninstall() {
         rm -rf "'"$REMOTE_DIR"'"
         echo "Removed deploy directory '"$REMOTE_DIR"'."
     '
+    divider
     log "Uninstall complete."
+    divider
 }
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
@@ -140,6 +149,7 @@ trap 'rm -rf "$STAGE_DIR"' EXIT
 
 log "Staging files in $STAGE_DIR..."
 cp "$DEB_PATH" "$STAGE_DIR/"
+cp package/install.sh "$STAGE_DIR/install.sh"
 
 mkdir -p "$STAGE_DIR/scripts"
 for f in "${SCRIPTS_TO_COPY[@]}"; do
@@ -160,6 +170,6 @@ log "Done. Files are at ${REMOTE_DIR} on the box. Next steps (manual, over your 
 echo
 print_next_steps "$DEB_BASENAME"
 echo
-if ! ssh -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" "dpkg -s libcurl4" &>/dev/null; then
-    warn "client-cpp needs libcurl4 (+ its TLS chain) at runtime - if it fails to run, 'sudo apt install -y libcurl4'."
+if ! ssh -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" "dpkg -s libcurl4 || dpkg -s libcurl4t64" &>/dev/null; then
+    warn "client-cpp needs libcurl4 (+ its TLS chain) at runtime - if it fails to run, 'sudo apt install -y libcurl4t64 || sudo apt install -y libcurl4'."
 fi
