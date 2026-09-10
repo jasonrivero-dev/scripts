@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Builds the novarc-licensing .deb (and example client binaries, if not
+# already built) and copies everything needed to QA-test it on a bare EC2
+# box - the package plus the installed-path-safe scripts, nothing that needs
+# the cargo workspace itself. Does not install or provision anything remotely
+# - that's a manual step over your own SSH session, printed at the end.
+
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+log() {
+    echo -e "[$(date +"%H:%M:%S")] [${GREEN}INFO${NC}] $*"
+}
+
+warn() {
+    echo -e "[$(date +"%H:%M:%S")] [${YELLOW}WARN${NC}] $*"
+}
+
+error() {
+    echo -e "[$(date +"%H:%M:%S")] [${RED}ERROR${NC}] $*" >&2
+}
+
+REPO_DIR="${REPO_DIR:-$HOME/dev/licensing-poc}"
+KEY_FILE="${KEY_FILE:-$HOME/.ec2/Edge-Licensing-Login-Pair.pem}"
+REMOTE_USER="${REMOTE_USER:-ubuntu}"
+REMOTE_HOST="${REMOTE_HOST:-35.162.41.238}"
+REMOTE_DIR="${REMOTE_DIR:-/home/ubuntu/licensing-deploy}"
+
+# Installed-path-safe only - see docs/TOOLS.md / feedback_qa_scripts_installed_paths_only.
+# dev_build and air_gap_cert_tool are deliberately excluded (dev-workspace-only).
+SCRIPTS_TO_COPY=(
+    common
+    dev_lib
+    entitlement_lib
+    health
+    dev_logs
+    qa_manage_entitlement
+    dev_test_entitlements
+    dev_test_proxy
+    dev_test_e2e
+    dev_test_mitm
+    qa_test_clients
+)
+
+print_next_steps() {
+    local deb_basename="$1"
+    echo "  ssh -i $KEY_FILE ${REMOTE_USER}@${REMOTE_HOST}"
+    echo "  cd ${REMOTE_DIR}"
+    echo "  sudo apt install ./${deb_basename}   # apt resolves tpm2-tools/acl deps; plain dpkg -i needs 'apt-get install -f' after"
+    echo "  sudo lictl init <license-id>"
+    echo "  scripts/dev_test_e2e"
+    echo "  scripts/qa_test_clients"
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    echo "Usage: licadmin-ec2-deploy"
+    echo
+    echo "Builds the .deb + example clients, copies them plus the installed-path-safe"
+    echo "QA scripts to the EC2 box below. Does not install/provision anything remotely -"
+    echo "these are the manual steps to run yourself afterward, over your own SSH session:"
+    echo
+    print_next_steps "novarc-licensing_<version>_<arch>.deb"
+    exit 0
+fi
+
+if [ ! -d "$REPO_DIR" ]; then
+    error "Repo not found at $REPO_DIR (set REPO_DIR to override)."
+    exit 1
+fi
+if [ ! -f "$KEY_FILE" ]; then
+    error "SSH key not found at $KEY_FILE (set KEY_FILE to override)."
+    exit 1
+fi
+
+cd "$REPO_DIR"
+
+log "Building .deb via ./build.sh deb..."
+./build.sh deb
+
+DEB_PATH=$(find target/debian -maxdepth 1 -name '*.deb' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+if [ -z "$DEB_PATH" ]; then
+    error "No .deb found under target/debian after build."
+    exit 1
+fi
+log "Built package: $DEB_PATH"
+
+if [ ! -x "examples/bin/client-rust" ] || [ ! -x "examples/bin/client-go" ] || [ ! -x "examples/bin/client-cpp" ]; then
+    log "Example client binaries missing - building locally via examples/build.sh..."
+    (cd examples && ./build.sh)
+fi
+
+STAGE_DIR=$(mktemp -d)
+trap 'rm -rf "$STAGE_DIR"' EXIT
+
+log "Staging files in $STAGE_DIR..."
+cp "$DEB_PATH" "$STAGE_DIR/"
+
+mkdir -p "$STAGE_DIR/scripts"
+for f in "${SCRIPTS_TO_COPY[@]}"; do
+    cp "scripts/$f" "$STAGE_DIR/scripts/$f"
+done
+
+mkdir -p "$STAGE_DIR/examples/bin"
+cp examples/bin/client-rust examples/bin/client-go examples/bin/client-cpp "$STAGE_DIR/examples/bin/"
+cp examples/config.toml "$STAGE_DIR/examples/config.toml"
+
+log "Copying to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}..."
+ssh -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '$REMOTE_DIR'"
+scp -i "$KEY_FILE" -r "$STAGE_DIR"/. "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/"
+
+DEB_BASENAME=$(basename "$DEB_PATH")
+
+log "Done. Files are at ${REMOTE_DIR} on the box. Next steps (manual, over your own SSH session):"
+echo
+print_next_steps "$DEB_BASENAME"
+echo
+warn "client-cpp needs libcurl4 (+ its TLS chain) at runtime - if it fails to run, 'sudo apt install -y libcurl4'."
