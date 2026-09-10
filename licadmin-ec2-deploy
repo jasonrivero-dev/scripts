@@ -70,18 +70,26 @@ print_next_steps() {
     echo "       sudo lictl licensing-su-password"
     echo
     echo "  --- Field Provisioning (Field Operator) - see docs/OPERATOR_HOWTO.md ---"
-    echo "  5. Log in as licensing_su, from a new session (no root involved from here on):"
+    echo "  5. Log in as licensing_su (no root involved from here on):"
     echo "       ssh -i $KEY_FILE licensing_su@${REMOTE_HOST}"
+    echo "     If that's rejected (publickey) - this box's sshd may not allow password auth -"
+    echo "     fall back to, from your existing ${REMOTE_USER} session:"
+    echo "       sudo su - licensing_su"
     echo "  6. Provision the real license, then confirm:"
     echo "       lictl init <license-id>"
     echo "       lictl status"
     echo "       lictl license"
+    echo "     Then leave this session (exit/logout) - it has zero sudo rights by design,"
+    echo "     including for the QA scripts below."
     echo
-    echo "  --- QA (either session) ---"
+    echo "  --- QA (back in the ${REMOTE_USER} session - licensing_su has no sudo) ---"
     echo "  7. Run the end-to-end test:"
-    echo "       scripts/dev_test_e2e"
+    echo "       sudo scripts/dev_test_e2e"
     echo "  8. Run the client tests:"
-    echo "       scripts/qa_test_clients"
+    echo "       sudo scripts/qa_test_clients"
+    echo "  9. Or run an example client directly (needs cwd inside examples/ - the"
+    echo "     binary looks for config.toml relative to where it's run, not itself):"
+    echo "       cd examples && bin/client-cpp noveye   # no sudo needed - hits the daemon over HTTP"
 }
 
 do_uninstall() {
@@ -176,7 +184,7 @@ done
 
 mkdir -p "$STAGE_DIR/examples/bin"
 cp examples/bin/client-rust examples/bin/client-go examples/bin/client-cpp "$STAGE_DIR/examples/bin/"
-cp examples/config.toml "$STAGE_DIR/examples/config.toml"
+cp examples/config.toml "$STAGE_DIR/config.toml"
 
 log "Copying to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}..."
 ssh -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '$REMOTE_DIR'"
