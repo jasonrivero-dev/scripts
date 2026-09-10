@@ -52,17 +52,35 @@ SCRIPTS_TO_COPY=(
 
 print_next_steps() {
     local deb_basename="$1"
-    echo "  1. Connect to the box:"
+    echo "  Connect and move to the deploy directory:"
     echo "       ssh -i $KEY_FILE ${REMOTE_USER}@${REMOTE_HOST}"
-    echo "  2. Move to the deploy directory:"
     echo "       cd ${REMOTE_DIR}"
-    echo "  3. Install the package (ensures acl/tpm2-tools first, then installs):"
+    echo
+    echo "  --- Factory Provisioning (Admin) - see docs/OPERATOR_HOWTO.md ---"
+    echo "  1. Install the package (ensures acl/tpm2-tools first, then installs):"
     echo "       sudo ./install.sh ${deb_basename}"
-    echo "  4. Initialize the license:"
-    echo "       sudo lictl init <license-id>"
-    echo "  5. Run the end-to-end test:"
+    echo "  2. Bring-up check with a test license, as root:"
+    echo "       sudo lictl init <test-license-id>"
+    echo "       sudo lictl status"
+    echo "       sudo lictl license   # expect every entitlement GRANTED"
+    echo "  3. Wipe the test license, bring the daemon back up:"
+    echo "       sudo lictl reset"
+    echo "       sudo lictl start"
+    echo "  4. Generate the licensing_su password for this box (shown once - write it down):"
+    echo "       sudo lictl licensing-su-password"
+    echo
+    echo "  --- Field Provisioning (Field Operator) - see docs/OPERATOR_HOWTO.md ---"
+    echo "  5. Log in as licensing_su, from a new session (no root involved from here on):"
+    echo "       ssh -i $KEY_FILE licensing_su@${REMOTE_HOST}"
+    echo "  6. Provision the real license, then confirm:"
+    echo "       lictl init <license-id>"
+    echo "       lictl status"
+    echo "       lictl license"
+    echo
+    echo "  --- QA (either session) ---"
+    echo "  7. Run the end-to-end test:"
     echo "       scripts/dev_test_e2e"
-    echo "  6. Run the client tests:"
+    echo "  8. Run the client tests:"
     echo "       scripts/qa_test_clients"
 }
 
