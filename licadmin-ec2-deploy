@@ -10,6 +10,10 @@ set -euo pipefail
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 RED='\033[0;31m'
+CYAN='\033[1;96m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 log() {
@@ -25,7 +29,8 @@ error() {
 }
 
 divider() {
-    echo "======================================================================"
+    local color="${1:-}"
+    echo -e "${color}======================================================================${NC}"
 }
 
 REPO_DIR="${REPO_DIR:-$HOME/dev/licensing-poc}"
@@ -50,46 +55,51 @@ SCRIPTS_TO_COPY=(
     qa_test_clients
 )
 
+section() { echo -e "  ${BOLD}${MAGENTA}--- $1 ---${NC}"; }
+step() { echo -e "  ${BOLD}$1${NC}"; }
+cmd() { echo -e "       ${CYAN}$1${NC}${2:+   ${DIM}$2${NC}}"; }
+note() { echo -e "     ${DIM}$1${NC}"; }
+
 print_next_steps() {
     local deb_basename="$1"
-    echo "  Connect and move to the deploy directory:"
-    echo "       ssh -i $KEY_FILE ${REMOTE_USER}@${REMOTE_HOST}"
-    echo "       cd ${REMOTE_DIR}"
+    step "Connect and move to the deploy directory:"
+    cmd "ssh -i $KEY_FILE ${REMOTE_USER}@${REMOTE_HOST}"
+    cmd "cd ${REMOTE_DIR}"
     echo
-    echo "  --- Factory Provisioning (Admin) - see docs/OPERATOR_HOWTO.md ---"
-    echo "  1. Install the package (ensures acl/tpm2-tools first, then installs):"
-    echo "       sudo ./install.sh ${deb_basename}"
-    echo "  2. Bring-up check with a test license, as root:"
-    echo "       sudo lictl init <test-license-id>"
-    echo "       sudo lictl status"
-    echo "       sudo lictl license   # expect every entitlement GRANTED"
-    echo "  3. Wipe the test license, bring the daemon back up:"
-    echo "       sudo lictl reset"
-    echo "       sudo lictl start"
-    echo "  4. Generate the licensing_su password for this box (shown once - write it down):"
-    echo "       sudo lictl licensing-su-password"
+    section "Factory Provisioning (Admin) - see docs/OPERATOR_HOWTO.md"
+    step "1. Install the package (ensures acl/tpm2-tools first, then installs):"
+    cmd "sudo ./install.sh ${deb_basename}"
+    step "2. Bring-up check with a test license, as root:"
+    cmd "sudo lictl init <test-license-id>"
+    cmd "sudo lictl status"
+    cmd "sudo lictl license" "# expect every entitlement GRANTED"
+    step "3. Wipe the test license, bring the daemon back up:"
+    cmd "sudo lictl reset"
+    cmd "sudo lictl start"
+    step "4. Generate the licensing_su password for this box (shown once - write it down):"
+    cmd "sudo lictl licensing-su-password"
     echo
-    echo "  --- Field Provisioning (Field Operator) - see docs/OPERATOR_HOWTO.md ---"
-    echo "  5. Log in as licensing_su (no root involved from here on):"
-    echo "       ssh -i $KEY_FILE licensing_su@${REMOTE_HOST}"
-    echo "     If that's rejected (publickey) - this box's sshd may not allow password auth -"
-    echo "     fall back to, from your existing ${REMOTE_USER} session:"
-    echo "       sudo su - licensing_su"
-    echo "  6. Provision the real license, then confirm:"
-    echo "       lictl init <license-id>"
-    echo "       lictl status"
-    echo "       lictl license"
-    echo "     Then leave this session (exit/logout) - it has zero sudo rights by design,"
-    echo "     including for the QA scripts below."
+    section "Field Provisioning (Field Operator) - see docs/OPERATOR_HOWTO.md"
+    step "5. Log in as licensing_su (no root involved from here on):"
+    cmd "ssh -i $KEY_FILE licensing_su@${REMOTE_HOST}"
+    note "If that's rejected (publickey) - this box's sshd may not allow password auth -"
+    note "fall back to, from your existing ${REMOTE_USER} session:"
+    cmd "sudo su - licensing_su"
+    step "6. Provision the real license, then confirm:"
+    cmd "lictl init <license-id>"
+    cmd "lictl status"
+    cmd "lictl license"
+    note "Then leave this session (exit/logout) - it has zero sudo rights by design,"
+    note "including for the QA scripts below."
     echo
-    echo "  --- QA (back in the ${REMOTE_USER} session - licensing_su has no sudo) ---"
-    echo "  7. Run the end-to-end test:"
-    echo "       sudo scripts/dev_test_e2e"
-    echo "  8. Run the client tests:"
-    echo "       sudo scripts/qa_test_clients"
-    echo "  9. Or run an example client directly (needs cwd inside examples/ - the"
-    echo "     binary looks for config.toml relative to where it's run, not itself):"
-    echo "       cd examples && bin/client-cpp noveye   # no sudo needed - hits the daemon over HTTP"
+    section "QA (back in the ${REMOTE_USER} session - licensing_su has no sudo)"
+    step "7. Run the end-to-end test:"
+    cmd "sudo scripts/dev_test_e2e"
+    step "8. Run the client tests:"
+    cmd "sudo scripts/qa_test_clients"
+    step "9. Or run an example client directly (needs cwd inside examples/ - the"
+    note "binary looks for config.toml relative to where it's run, not itself):"
+    cmd "cd examples && bin/client-cpp noveye" "# no sudo needed - hits the daemon over HTTP"
 }
 
 do_uninstall() {
@@ -98,31 +108,32 @@ do_uninstall() {
         exit 1
     fi
 
-    read -r -p "This will purge novarc-licensing and delete ${REMOTE_DIR} on ${REMOTE_HOST}. Continue? [y/N] " confirm
+    echo -e "${YELLOW}${BOLD}This will purge novarc-licensing and delete ${REMOTE_DIR} on ${REMOTE_HOST}.${NC}"
+    read -r -p "Continue? [y/N] " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         log "Aborted."
         exit 0
     fi
 
     echo
-    divider
+    divider "${BOLD}${RED}"
     log "Uninstalling novarc-licensing from ${REMOTE_USER}@${REMOTE_HOST}"
-    divider
+    divider "${BOLD}${RED}"
     ssh -t -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" '
         set -e
         sudo dpkg --purge novarc-licensing || sudo dpkg --remove --force-remove-reinstreq novarc-licensing
         sudo apt-get -y --fix-broken install
         if dpkg -l novarc-licensing 2>/dev/null | grep -qE "^(ii|iU)"; then
-            echo "novarc-licensing is still installed" >&2
+            echo -e "\033[0;31mnovarc-licensing is still installed\033[0m" >&2
             exit 1
         fi
-        echo "novarc-licensing removed."
+        echo -e "\033[0;32mnovarc-licensing removed.\033[0m"
         rm -rf "'"$REMOTE_DIR"'"
-        echo "Removed deploy directory '"$REMOTE_DIR"'."
+        echo -e "\033[0;32mRemoved deploy directory '"$REMOTE_DIR"'.\033[0m"
     '
-    divider
+    divider "${BOLD}${RED}"
     log "Uninstall complete."
-    divider
+    divider "${BOLD}${RED}"
 }
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
