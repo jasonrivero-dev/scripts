@@ -39,11 +39,16 @@ while true; do
         exit 1
     fi
 
+    bn="$(basename "$latest")"
+
+    echo
+    echo "======================================================================"
     if [[ -z "$pattern" ]]; then
         echo "Tailing: ${latest}"
     else
         echo "Tailing: ${latest} | pattern: ${pattern}"
     fi
+    echo "======================================================================"
 
     # Watches for a newer log appearing (celeste restarted) and kills this
     # iteration's tail so the outer loop can pick it up - tail -f alone has
@@ -61,10 +66,10 @@ while true; do
     # (seconds before this script attaches) would never be seen - tail -f's
     # default window would already be past it by the time we catch up.
     if [[ -z "$pattern" ]]; then
-        tail -n +1 -f "$latest"
+        tail -n +1 -f "$latest" | sed -u "s|^|[${bn}] |"
     else
         # -- guards against a pattern that itself starts with '-' being misread as a grep option.
-        tail -n +1 -f "$latest" | grep -i --line-buffered -- "$pattern"
+        tail -n +1 -f "$latest" | grep -i --line-buffered -- "$pattern" | sed -u "s|^|[${bn}] |"
     fi
 
     kill "$watcher_pid" 2>/dev/null
