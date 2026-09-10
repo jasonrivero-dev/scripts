@@ -118,4 +118,6 @@ log "Done. Files are at ${REMOTE_DIR} on the box. Next steps (manual, over your 
 echo
 print_next_steps "$DEB_BASENAME"
 echo
-warn "client-cpp needs libcurl4 (+ its TLS chain) at runtime - if it fails to run, 'sudo apt install -y libcurl4'."
+if ! ssh -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" "dpkg -s libcurl4" &>/dev/null; then
+    warn "client-cpp needs libcurl4 (+ its TLS chain) at runtime - if it fails to run, 'sudo apt install -y libcurl4'."
+fi
