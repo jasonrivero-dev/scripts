@@ -1,3 +1,4 @@
 config/configure.*
 md2html/mermaid-filter.err
 go/
+config/configure.*
