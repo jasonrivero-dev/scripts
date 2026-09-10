@@ -42,13 +42,13 @@ while true; do
     bn="$(basename "$latest")"
 
     echo
-    echo "======================================================================"
+    echo "============================================================================================================================================"
     if [[ -z "$pattern" ]]; then
         echo "Tailing: ${latest}"
     else
         echo "Tailing: ${latest} | pattern: ${pattern}"
     fi
-    echo "======================================================================"
+    echo "============================================================================================================================================"
 
     # Watches for a newer log appearing (celeste restarted) and kills this
     # iteration's tail so the outer loop can pick it up - tail -f alone has
