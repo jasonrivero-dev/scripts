@@ -67,7 +67,7 @@ print_next_steps() {
     cmd "cd ${REMOTE_DIR}"
     echo
     section "Factory Provisioning (Admin) - see docs/OPERATOR_HOWTO.md"
-    step "1. Install the package (ensures acl/tpm2-tools first, then installs):"
+    step "1. Install the package (ensures acl/tpm2-tools/curl/an NTP client first, then installs):"
     cmd "sudo ./install.sh ${deb_basename}"
     step "2. Bring-up check with a test license, as root:"
     cmd "sudo lictl init <test-license-id>"
