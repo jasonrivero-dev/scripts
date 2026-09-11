@@ -14,7 +14,7 @@ SCRIPTS_DIR=$(dirname "$SCRIPT_PATH")
 DEV_ROOT=$(dirname "$(dirname "$SCRIPTS_DIR")")
 PROJECT_ROOT="${DEV_ROOT}/celeste"
 
-source "${SCRIPTS_DIR}/dev-log-lib"
+source "${SCRIPTS_DIR}/../lib/dev-log-lib"
 source "${SCRIPTS_DIR}/dev-build-lib"
 
 BUILD_CONFIG="RelWithDebInfo"
@@ -175,7 +175,7 @@ TYPICAL WORKFLOWS
 ~/dev/scripts/celeste/dev-build.sh -pd
 
 # Verify SW-3035 crash-resilience on real GPU (forced kill -9 mid-recording)
-~/dev/scripts/FFMpegCrash/run.sh
+~/dev/scripts/celeste/ffmpeg-crash/run.sh
 
 # A third-party checkout's stray `cmake .` broke the Docker build
 ~/dev/scripts/celeste/dev-build.sh -cd

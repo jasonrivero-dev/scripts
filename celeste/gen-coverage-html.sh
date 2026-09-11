@@ -4,7 +4,7 @@
 set -e
 
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-CELESTE_ROOT=$(dirname "$SCRIPT_DIR")/celeste
+CELESTE_ROOT=$(dirname "$(dirname "$SCRIPT_DIR")")/celeste
 
 cd "$CELESTE_ROOT"
 

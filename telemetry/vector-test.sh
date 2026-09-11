@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 1. Source the logging library at the absolute beginning
-LIB_PATH="$HOME/dev/scripts/dev-log-lib"
+LIB_PATH="$HOME/dev/scripts/lib/dev-log-lib"
 if [[ -f "$LIB_PATH" ]]; then
     source "$LIB_PATH"
 else

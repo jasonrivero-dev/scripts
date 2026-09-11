@@ -13,7 +13,7 @@ set -e
 
 SCRIPT_PATH=$(readlink -f "$0")
 SCRIPTS_DIR=$(dirname "$SCRIPT_PATH")
-source "${SCRIPTS_DIR}/dev-log-lib"
+source "${SCRIPTS_DIR}/../lib/dev-log-lib"
 
 CELESTE_FILES="${HOME}/dev/celeste-files"
 NOVEYE_DIR="${CELESTE_FILES}/NovEye"

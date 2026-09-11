@@ -1,4 +1,4 @@
-config/configure.*
-md2html/mermaid-filter.err
+telemetry/config/configure.*
+tools/md2html/mermaid-filter.err
+tools/jiracli/token
 go/
-config/configure.*

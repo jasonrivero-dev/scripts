@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-TOKEN_FILE="$HOME/dev/scripts/jiracli/token"
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+TOKEN_FILE="$SCRIPT_DIR/token"
 if [[ -f "$TOKEN_FILE" ]]; then
   export JIRA_API_TOKEN=$(cat "$TOKEN_FILE")
 else

@@ -1,4 +1,4 @@
-# FFMpegCrash — SW-3035 crash-resilience verification
+# ffmpeg-crash — SW-3035 crash-resilience verification
 
 Manual verification tool for SW-3035 (corrupt captures crashing VLC on customer machines).
 Confirms that a recording killed mid-write (crash, OOM, power loss) still leaves a valid,
