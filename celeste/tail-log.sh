@@ -1,27 +1,36 @@
 #!/usr/bin/env bash
 
-LOG_DIR="${HOME}/dev/celeste-files/NovEye/logs"
+DEV_LOG_DIR="${HOME}/dev/celeste-files/NovEye/logs"
+PROD_LOG_DIR="/var/log/novarc/celeste"
+LOG_DIR="$DEV_LOG_DIR"
 POLL_SECONDS=2
 
 usage() {
-    echo "Usage: $(basename "$0") [pattern]"
+    echo "Usage: $(basename "$0") [-p|--production] [pattern]"
     echo
-    echo "Tails the newest log in ${LOG_DIR}, following celeste across restarts:"
-    echo "if a newer log file appears while this is running, it switches to it"
-    echo "automatically instead of staying stuck on the old one."
+    echo "Tails the newest log, following celeste across restarts: if a newer log"
+    echo "file appears while this is running, it switches to it automatically"
+    echo "instead of staying stuck on the old one."
+    echo
+    echo "  -p, --production   Use ${PROD_LOG_DIR} instead of the dev default"
+    echo "                     ${DEV_LOG_DIR}"
+    echo
     echo "With a pattern, filters live via grep -i (case-insensitive, matches as they arrive)."
     echo
     echo "Examples:"
-    echo "  $(basename "$0")            # whole live log, unfiltered"
-    echo "  $(basename "$0") licensing  # only lines matching 'licensing' (case-insensitive)"
+    echo "  $(basename "$0")               # whole live dev log, unfiltered"
+    echo "  $(basename "$0") licensing     # only lines matching 'licensing' (case-insensitive)"
+    echo "  $(basename "$0") -p licensing  # same, but against the production log"
 }
 
-if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-    usage
-    exit 0
-fi
-
-pattern="$1"
+pattern=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -p|--production) LOG_DIR="$PROD_LOG_DIR"; shift ;;
+        *) pattern="$1"; shift ;;
+    esac
+done
 
 find_latest() {
     ls -t "${LOG_DIR}"/NovEye.g3log.*.log 2>/dev/null | head -n 1
