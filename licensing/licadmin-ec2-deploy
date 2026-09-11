@@ -207,6 +207,7 @@ trap 'rm -rf "$STAGE_DIR"' EXIT
 log "Staging files in $STAGE_DIR..."
 cp "$DEB_PATH" "$STAGE_DIR/"
 cp package/install.sh "$STAGE_DIR/install.sh"
+cp package/lib-colors.sh "$STAGE_DIR/lib-colors.sh"
 
 mkdir -p "$STAGE_DIR/scripts"
 for f in "${SCRIPTS_TO_COPY[@]}"; do
