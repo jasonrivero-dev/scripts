@@ -39,7 +39,10 @@ REPO_DIR="${REPO_DIR:-$HOME/dev/licensing-poc}"
 KEY_FILE="${KEY_FILE:-$HOME/.ec2/Edge-Licensing-Login-Pair.pem}"
 REMOTE_USER="${REMOTE_USER:-ubuntu}"
 REMOTE_HOST="${REMOTE_HOST:-35.162.41.238}"
-REMOTE_DIR="${REMOTE_DIR:-/home/ubuntu/licensing-deploy}"
+# REMOTE_DIR's default is derived from REMOTE_USER, so it's resolved after
+# argument parsing below (once -u has had a chance to override REMOTE_USER) -
+# an explicit REMOTE_DIR env var override still wins over that derivation.
+REMOTE_DIR_OVERRIDE="${REMOTE_DIR:-}"
 
 # Installed-path-safe only - see docs/TOOLS.md / feedback_qa_scripts_installed_paths_only.
 # dev_build and air_gap_cert_tool are deliberately excluded (dev-workspace-only).
@@ -65,7 +68,7 @@ note() { echo -e "     ${DIM}$1${NC}"; }
 print_next_steps() {
     local deb_basename="$1"
     step "Connect and move to the deploy directory:"
-    cmd "ssh -i $KEY_FILE ${REMOTE_USER}@${REMOTE_HOST}"
+    cmd "${SSH_HINT} ${REMOTE_USER}@${REMOTE_HOST}"
     cmd "cd ${REMOTE_DIR}"
     echo
     section "Factory Provisioning (Admin) - see docs/OPERATOR_HOWTO.md"
@@ -83,7 +86,7 @@ print_next_steps() {
     echo
     section "Field Provisioning (Field Operator) - see docs/OPERATOR_HOWTO.md"
     step "5. Log in as licensing_su (no root involved from here on):"
-    cmd "ssh -i $KEY_FILE licensing_su@${REMOTE_HOST}"
+    cmd "${SSH_HINT} licensing_su@${REMOTE_HOST}"
     note "If that's rejected (publickey) - this box's sshd may not allow password auth -"
     note "fall back to, from your existing ${REMOTE_USER} session:"
     cmd "sudo su - licensing_su"
@@ -107,11 +110,6 @@ print_next_steps() {
 }
 
 do_uninstall() {
-    if [ ! -f "$KEY_FILE" ]; then
-        error "SSH key not found at $KEY_FILE (set KEY_FILE to override)."
-        exit 1
-    fi
-
     echo -e "${YELLOW}${BOLD}This will purge novarc-licensing and delete ${REMOTE_DIR} on ${REMOTE_HOST}.${NC}"
     read -r -p "Continue? [y/N] " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -123,7 +121,7 @@ do_uninstall() {
     divider "${BOLD}${RED}"
     log "Uninstalling novarc-licensing from ${REMOTE_USER}@${REMOTE_HOST}"
     divider "${BOLD}${RED}"
-    ssh -t -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" '
+    ssh -t "${SSH_KEY_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" '
         set -e
         sudo dpkg --purge novarc-licensing || sudo dpkg --remove --force-remove-reinstreq novarc-licensing
         sudo apt-get -y --fix-broken install
@@ -141,16 +139,36 @@ do_uninstall() {
 }
 
 ACTION="deploy"
+TARGET_OVERRIDDEN=false
+KEY_OVERRIDDEN=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) ACTION="help"; shift ;;
         --uninstall) ACTION="uninstall"; shift ;;
-        -u) REMOTE_USER="$2"; shift 2 ;;
-        -s) REMOTE_HOST="$2"; shift 2 ;;
-        -k) KEY_FILE="$2"; shift 2 ;;
+        -u) REMOTE_USER="$2"; TARGET_OVERRIDDEN=true; shift 2 ;;
+        -s) REMOTE_HOST="$2"; TARGET_OVERRIDDEN=true; shift 2 ;;
+        -k) KEY_FILE="$2"; KEY_OVERRIDDEN=true; shift 2 ;;
         *) error "Unknown argument: $1"; exit 1 ;;
     esac
 done
+
+REMOTE_DIR="${REMOTE_DIR_OVERRIDE:-/home/${REMOTE_USER}/licensing-deploy}"
+
+# -u/-s alone mean a different box, reached with a password, not the default
+# box's key - no -i is passed unless -k explicitly asks for one. Without
+# -u/-s (the original single default box), the default key is required, same
+# as always.
+if $KEY_OVERRIDDEN || ! $TARGET_OVERRIDDEN; then
+    if [ ! -f "$KEY_FILE" ]; then
+        error "SSH key not found at $KEY_FILE (set KEY_FILE, or pass -k, to override)."
+        exit 1
+    fi
+    SSH_KEY_OPTS=(-i "$KEY_FILE")
+    SSH_HINT="ssh -i $KEY_FILE"
+else
+    SSH_KEY_OPTS=()
+    SSH_HINT="ssh"
+fi
 
 if [ "$ACTION" = "help" ]; then
     echo "Usage: licadmin-ec2-deploy [--uninstall] [-u <user>] [-s <host>] [-k <keyfile>]"
@@ -163,10 +181,14 @@ if [ "$ACTION" = "help" ]; then
     echo
     echo "--uninstall: purges novarc-licensing and deletes ${REMOTE_DIR} on the box above,"
     echo "             after a y/N confirmation prompt. Connects over SSH and runs it directly."
-    echo "-u <user>:   override the remote SSH user (default: ${REMOTE_USER})."
-    echo "-s <host>:   override the remote host/IP (default: ${REMOTE_HOST})."
-    echo "-k <keyfile>: override the SSH identity file (default: ${KEY_FILE})."
-    echo "             A different box needs its own key - there is no password-auth fallback."
+    echo "-u <user>:    override the remote SSH user (default: ubuntu)."
+    echo "-s <host>:    override the remote host/IP (default: 35.162.41.238)."
+    echo "-k <keyfile>: use this SSH identity file instead of the default"
+    echo "              ($HOME/.ec2/Edge-Licensing-Login-Pair.pem)."
+    echo "              Passing -u and/or -s without -k means a different box, reached"
+    echo "              with a password instead - no -i is sent, so ssh will prompt for"
+    echo "              one directly. The default key is only used when neither -u nor"
+    echo "              -s is given, or when -k explicitly asks for a key."
     exit 0
 fi
 
@@ -177,10 +199,6 @@ fi
 
 if [ ! -d "$REPO_DIR" ]; then
     error "Repo not found at $REPO_DIR (set REPO_DIR to override)."
-    exit 1
-fi
-if [ ! -f "$KEY_FILE" ]; then
-    error "SSH key not found at $KEY_FILE (set KEY_FILE to override)."
     exit 1
 fi
 
@@ -220,8 +238,8 @@ cp examples/bin/client-rust examples/bin/client-go examples/bin/client-cpp "$STA
 cp examples/config.toml "$STAGE_DIR/config.toml"
 
 log "Copying to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}..."
-ssh -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '$REMOTE_DIR'"
-scp -i "$KEY_FILE" -r "$STAGE_DIR"/. "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/"
+ssh "${SSH_KEY_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '$REMOTE_DIR'"
+scp "${SSH_KEY_OPTS[@]}" -r "$STAGE_DIR"/. "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/"
 
 DEB_BASENAME=$(basename "$DEB_PATH")
 
@@ -229,6 +247,6 @@ log "Done. Files are at ${REMOTE_DIR} on the box. Next steps (manual, over your 
 echo
 print_next_steps "$DEB_BASENAME"
 echo
-if ! ssh -i "$KEY_FILE" "${REMOTE_USER}@${REMOTE_HOST}" "dpkg -s libcurl4 || dpkg -s libcurl4t64" &>/dev/null; then
+if ! ssh "${SSH_KEY_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "dpkg -s libcurl4 || dpkg -s libcurl4t64" &>/dev/null; then
     warn "client-cpp needs libcurl4 (+ its TLS chain) at runtime - if it fails to run, 'sudo apt install -y libcurl4t64 || sudo apt install -y libcurl4'."
 fi
