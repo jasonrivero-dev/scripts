@@ -4,6 +4,18 @@ A collection of local development, build, test, telemetry, licensing, and diagno
 
 This repository is **not a standalone application**. Most commands assume a Linux development machine, a Celeste checkout at `~/dev/celeste`, and other Novarc services or tools installed in their normal system locations. Read each script's help output before using it.
 
+The repo is organized by topic:
+
+| Folder | Purpose |
+| --- | --- |
+| [`celeste/`](celeste/) | Celeste host build, launch, setup, logging, coverage, metrics/PLC helpers, FFmpeg crash repro |
+| [`licensing/`](licensing/) | `novarc-licensing` CLI wrapper, EC2 QA deploy/uninstall, Keygen checkout test, TPM hardware ID |
+| [`telemetry/`](telemetry/) | Vector/Prometheus/Grafana stack control, test environment loader, mocks, configure templates |
+| [`tools/`](tools/) | Diverse one-off utilities: Jira CLI wrappers, Markdown-to-HTML converter |
+| [`lib/`](lib/) | Shared logging helpers sourced by scripts in `celeste/` and `telemetry/` |
+| [`docs/`](docs/) | Personal VS Code how-to and IDE troubleshooting notes |
+| [`gen-coverage.sh`](gen-coverage.sh) | The one script that stays at repo root — see [Coverage](#coverage) below |
+
 ## Quick Start
 
 ```bash
@@ -63,9 +75,9 @@ Install only the dependencies needed for the workflow you are using. Common requ
 
 The scripts do not provide a single dependency installer for all workflows. `telemetry/install_metrics_deps.sh` is specifically for Docker, ACL utilities, and Vector telemetry dependencies.
 
-## Celeste Development
+## celeste/
 
-The [`celeste/`](celeste/) directory contains the preferred host-side wrapper around the separate Celeste checkout, plus the celeste-specific tooling that used to sit at the repo root.
+The preferred host-side wrapper around the separate Celeste checkout, plus every celeste-specific helper that used to sit at the repo root.
 
 ### Host build and tests
 
@@ -139,6 +151,23 @@ cd ~/dev/scripts
 
 For a summary of the Celeste Makefile, use `./celeste/dev-build.sh -mt`. The detailed flag documentation and known build gotchas are available through `./celeste/dev-build.sh -hh`.
 
+### Coverage
+
+Coverage helpers target a Celeste checkout and use LCOV:
+
+```bash
+# Capture, filter, and generate an HTML report
+./gen-coverage.sh
+
+# Select another sibling project directory and open the result
+./gen-coverage.sh -t celeste -o
+
+# Convert an existing coverage_filtered.info into the host-mapped report
+./celeste/gen-coverage-html.sh
+```
+
+Reports are written below the Celeste checkout, normally under `reports/host_coverage_report`. `gen-coverage-html.sh` expects `coverage_filtered.info` to already exist; `gen-coverage.sh` produces `filtered.info`, so check the expected tracefile before combining these workflows. `gen-coverage.sh` is the one script that stays at the repo root: it's a generic, parameterized (`-t <target>`) tool that can target any sibling project under `~/dev`, not just Celeste, even though Celeste is its default target.
+
 ### Metrics and PLC data
 
 ```bash
@@ -155,15 +184,13 @@ For a summary of the Celeste Makefile, use `./celeste/dev-build.sh -mt`. The det
 ./celeste/create_dirs.sh
 ```
 
-### Logs and VS Code
+### Logs
 
 ```bash
 # Follow the newest log; optionally filter case-insensitively
 ./celeste/tail-log.sh
 ./celeste/tail-log.sh licensing
 ```
-
-The personal VS Code notes are in [`docs/VSCODE_HOWTO.md`](docs/VSCODE_HOWTO.md). The troubleshooting guide covers stale CMake source globs and IntelliSense problems in [`docs/VSCODE_IDE_TROUBLESHOOTING.md`](docs/VSCODE_IDE_TROUBLESHOOTING.md). These documents describe local `.vscode` files, which are ignored by this repository.
 
 ### FFmpeg crash resilience
 
@@ -176,26 +203,47 @@ CELESTE_ROOT=/path/to/celeste BUILD_CONFIG=Debug ./celeste/ffmpeg-crash/run.sh
 
 It stages a helper into the Celeste source tree, builds it through Celeste's CMake graph, kills the recorder with `SIGKILL`, and validates the resulting MP4 with `ffprobe`. It requires a configured host build and real NVIDIA NVENC hardware. See [`celeste/ffmpeg-crash/README.md`](celeste/ffmpeg-crash/README.md) for the expected PASS/FAIL behavior.
 
-## Coverage
+## licensing/
 
-Coverage helpers target a Celeste checkout and use LCOV:
+Everything here supports the `novarc-licensing` product.
+
+### licadmin
 
 ```bash
-# Capture, filter, and generate an HTML report
-./gen-coverage.sh
-
-# Select another sibling project directory and open the result
-./gen-coverage.sh -t celeste -o
-
-# Convert an existing coverage_filtered.info into the host-mapped report
-./celeste/gen-coverage-html.sh
+./licensing/licadmin keygen
+./licensing/licadmin hwid
+./licensing/licadmin lazy-issue [customer_name] [app_name]
+./licensing/licadmin <other licensing-cli arguments>
 ```
 
-Reports are written below the Celeste checkout, normally under `reports/host_coverage_report`. `gen-coverage-html.sh` expects `coverage_filtered.info` to already exist; `gen-coverage.sh` produces `filtered.info`, so check the expected tracefile before combining these workflows. `gen-coverage.sh` stays at the repo root since it is a generic, parameterized (`-t <target>`) tool that can target any sibling project under `~/dev`, not just Celeste.
+A wrapper around the separate `~/dev/Licensing` Rust workspace. `lazy-issue` creates a one-year development license with a five-day grace period and installs it with `lictl` when available. It may create or use `~/.licadmin_keys`, invoke `sudo`, and write a temporary `dev_license.lic` in the current directory.
 
-## Telemetry
+### licadmin-ec2-deploy
 
-Everything under [`telemetry/`](telemetry/) supports the Vector + Prometheus + Grafana observability stack.
+Builds the `novarc-licensing` .deb and example clients from `~/dev/licensing-poc`, copies them plus the installed-path-safe QA scripts to a QA EC2 box, and prints the manual provisioning steps to run over your own SSH session:
+
+```bash
+./licensing/licadmin-ec2-deploy
+./licensing/licadmin-ec2-deploy --uninstall
+```
+
+`--uninstall` purges the package and deletes the remote deploy directory after a y/N confirmation prompt.
+
+### Keygen checkout test
+
+[`licensing/keygen/test_keygen.sh`](licensing/keygen/test_keygen.sh) is a separate online checkout test. It sources `~/dev/novarc-swr-license.keygen` and `~/dev/novarc-admin-token.keygen`, then calls the Keygen API with `curl` and formats the response with `jq`.
+
+### TPM hardware ID
+
+```bash
+./licensing/tpm/test.sh
+```
+
+Derives an ID from a TPM 2.0 endorsement key and falls back to a stable OS/CPU-derived hash when TPM tooling or hardware is unavailable. It underlies the hardware-ID fingerprinting that `licadmin hwid` also produces.
+
+## telemetry/
+
+Everything here supports the Vector + Prometheus + Grafana observability stack.
 
 ### Install and control the telemetry stack
 
@@ -236,7 +284,7 @@ It reads the configure file, exports AWS and telemetry variables, creates `/tmp/
 ./telemetry/mock/wsm_mock.sh
 ```
 
-The mock scripts write beneath `/var/log/novarc/...` and may require the directories to exist first (see `celeste/create_dirs.sh` above for the Celeste-specific paths).
+The mock scripts write beneath `/var/log/novarc/...` and may require the directories to exist first (see `celeste/create_dirs.sh` for the Celeste-specific paths).
 
 ### Sync telemetry from a robot
 
@@ -246,39 +294,11 @@ The mock scripts write beneath `/var/log/novarc/...` and may require the directo
 
 This bundles telemetry folders on the remote robot and copies the archive locally using the configured AWS SSM profile and `novarc` user. Review the remote paths and profile in the script before using it with a new robot or environment.
 
-## Licensing
+## tools/
 
-Everything under [`licensing/`](licensing/) supports the `novarc-licensing` product.
+Diverse one-off utilities that don't belong to a specific product.
 
-```bash
-./licensing/licadmin keygen
-./licensing/licadmin hwid
-./licensing/licadmin lazy-issue [customer_name] [app_name]
-./licensing/licadmin <other licensing-cli arguments>
-```
-
-`licadmin` is a wrapper around the separate `~/dev/Licensing` Rust workspace. `lazy-issue` creates a one-year development license with a five-day grace period and installs it with `lictl` when available. It may create or use `~/.licadmin_keys`, invoke `sudo`, and write a temporary `dev_license.lic` in the current directory.
-
-`licensing/licadmin-ec2-deploy` builds the `novarc-licensing` .deb and example clients from `~/dev/licensing-poc`, copies them plus the installed-path-safe QA scripts to a QA EC2 box, and prints the manual provisioning steps to run over your own SSH session:
-
-```bash
-./licensing/licadmin-ec2-deploy
-./licensing/licadmin-ec2-deploy --uninstall
-```
-
-`--uninstall` purges the package and deletes the remote deploy directory after a y/N confirmation prompt.
-
-The [`licensing/keygen/test_keygen.sh`](licensing/keygen/test_keygen.sh) script is a separate online checkout test. It sources `~/dev/novarc-swr-license.keygen` and `~/dev/novarc-admin-token.keygen`, then calls the Keygen API with `curl` and formats the response with `jq`.
-
-### TPM hardware ID
-
-```bash
-./licensing/tpm/test.sh
-```
-
-The script attempts to derive an ID from a TPM 2.0 endorsement key and falls back to a stable OS/CPU-derived hash when TPM tooling or hardware is unavailable. It underlies the hardware-ID fingerprinting that `licadmin hwid` also produces.
-
-## Jira CLI Helpers
+### Jira CLI
 
 ```bash
 # View one or more issues, including the latest three comments
@@ -293,7 +313,7 @@ The script attempts to derive an ID from a TPM 2.0 endorsement key and falls bac
 
 Both scripts expect a token at `tools/jiracli/token` (resolved relative to the script's own location) and the Jira CLI to be installed. `get-my-tickets.sh` defaults to excluding Done issues unless an explicit status, epic, or title query is supplied.
 
-## Markdown to HTML
+### Markdown to HTML
 
 Convert all Markdown files in a directory into standalone HTML with a table of contents, embedded resources, Novarc styling, and Mermaid support:
 
@@ -305,17 +325,18 @@ Convert all Markdown files in a directory into standalone HTML with a table of c
 
 The default target is `~/Documents`. The converter uses [`tools/md2html/novarc.css`](tools/md2html/novarc.css), [`tools/md2html/header.html`](tools/md2html/header.html), and the `mermaid-filter` executable. It writes a temporary `.puppeteer.json` in the current working directory and removes it on exit.
 
-## Repository Map
+## lib/
 
-| Path | Purpose |
-| --- | --- |
-| [`celeste/`](celeste/) | Celeste host build, launch, setup, logging, coverage, metrics/PLC helpers, and FFmpeg crash repro |
-| [`licensing/`](licensing/) | `novarc-licensing` CLI wrapper, EC2 QA deploy/uninstall, Keygen checkout test, TPM hardware ID |
-| [`telemetry/`](telemetry/) | Vector/Prometheus/Grafana stack control, test environment loader, mocks, configure templates |
-| [`tools/`](tools/) | Diverse one-off utilities: Jira CLI wrappers, Markdown-to-HTML converter |
-| [`lib/`](lib/) | Shared logging helpers (`dev-log-lib`) sourced by scripts in `celeste/` and `telemetry/` |
-| [`docs/`](docs/) | Personal VS Code how-to and IDE troubleshooting notes |
-| [`gen-coverage.sh`](gen-coverage.sh) | Capture/filter/render LCOV coverage for any sibling `~/dev` project (defaults to Celeste) |
+[`lib/dev-log-lib`](lib/dev-log-lib) is the shared NOVARC-banner logging helper library. It's sourced by `celeste/dev-build.sh`, `celeste/celeste-setup.sh`, and `telemetry/vector-test.sh` — anything that wants the same colored/bannered log output. It's a plain library file, not something you run directly.
+
+## docs/
+
+Personal reference notes, not scripts:
+
+- [`docs/VSCODE_HOWTO.md`](docs/VSCODE_HOWTO.md) — day-to-day VS Code tasks/launch configs for Celeste development.
+- [`docs/VSCODE_IDE_TROUBLESHOOTING.md`](docs/VSCODE_IDE_TROUBLESHOOTING.md) — stale CMake source globs and IntelliSense problems.
+
+These documents describe local `.vscode` files, which are ignored by this repository.
 
 ## Conventions
 
