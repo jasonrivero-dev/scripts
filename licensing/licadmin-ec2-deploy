@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds the novarc-licensing .deb (and example client binaries, if not
-# already built) and copies everything needed to QA-test it on a bare EC2
-# box - the package plus the installed-path-safe scripts, nothing that needs
-# the cargo workspace itself. Does not install or provision anything remotely
-# - that's a manual step over your own SSH session, printed at the end.
+# Builds the novarc-licensing .deb (and the client-rust/client-go example
+# binaries, if not already built - both statically linked, portable to any
+# target regardless of its glibc version) and copies everything needed to
+# QA-test it on a bare EC2 box, plus client-cpp's source (built on the
+# remote box itself instead - it links the system's libcurl, which has no
+# static archive to build against elsewhere). Nothing here needs the cargo
+# workspace itself. Does not install or provision anything remotely - that's
+# a manual step over your own SSH session, printed at the end.
 
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -98,14 +101,20 @@ print_next_steps() {
     note "including for the QA scripts below."
     echo
     section "QA (back in the ${REMOTE_USER} session - licensing_su has no sudo)"
-    step "7. Run the end-to-end test:"
+    step "7. Build client-cpp on this box (only client-rust/client-go are shipped prebuilt -"
+    note "client-cpp links the system's libcurl, which has no static archive to build"
+    note "against elsewhere, so it's compiled here instead - one-time, unless this box"
+    note "already has cmake/g++/libcurl4-openssl-dev):"
+    cmd "sudo apt-get install -y cmake g++ libcurl4-openssl-dev"
+    cmd "./examples/build.sh --cpp --release"
+    step "8. Run the end-to-end test:"
     cmd "sudo scripts/dev_test_e2e"
-    step "8. Run the client tests:"
+    step "9. Run the client tests:"
     cmd "sudo scripts/qa_test_clients"
-    step "9. Or run an example client directly (needs cwd inside examples/ - the"
+    step "10. Or run an example client directly (needs cwd inside examples/ - the"
     note "binary looks for config.toml relative to where it's run, not itself):"
     cmd "cd examples && bin/client-cpp noveye" "# no sudo needed - hits the daemon over HTTP"
-    step "10. Tail the newest log, following restarts (celeste's tail-log.sh, shipped along):"
+    step "11. Tail the newest log, following restarts (celeste's tail-log.sh, shipped along):"
     cmd "scripts/tail-log.sh"
 }
 
@@ -173,9 +182,10 @@ fi
 if [ "$ACTION" = "help" ]; then
     echo "Usage: licadmin-ec2-deploy [--uninstall] [-u <user>] [-s <host>] [-k <keyfile>]"
     echo
-    echo "Builds the .deb + example clients, copies them plus the installed-path-safe"
-    echo "QA scripts to the EC2 box below. Does not install/provision anything remotely -"
-    echo "these are the manual steps to run yourself afterward, over your own SSH session:"
+    echo "Builds the .deb + client-rust/client-go example binaries, copies them plus"
+    echo "client-cpp's source and the installed-path-safe QA scripts to the EC2 box below."
+    echo "Does not install/provision anything remotely - these are the manual steps to run"
+    echo "yourself afterward, over your own SSH session:"
     echo
     print_next_steps "novarc-licensing_<version>_<arch>.deb"
     echo
@@ -214,9 +224,15 @@ if [ -z "$DEB_PATH" ]; then
 fi
 log "Built package: $DEB_PATH"
 
-if [ ! -x "examples/bin/client-rust" ] || [ ! -x "examples/bin/client-go" ] || [ ! -x "examples/bin/client-cpp" ]; then
-    log "Example client binaries missing - building locally via examples/build.sh..."
-    (cd examples && ./build.sh)
+# Only rust/go are shipped as prebuilt binaries - both build statically
+# (musl / CGO_ENABLED=0, see examples/build.sh) so they run on any target
+# regardless of its glibc version. client-cpp links the system's libcurl,
+# which Ubuntu ships with no static archive - it can't be made portable the
+# same way, so it's built ON the remote box instead (source staged below,
+# step in print_next_steps).
+if [ ! -x "examples/bin/client-rust" ] || [ ! -x "examples/bin/client-go" ]; then
+    log "Rust/Go example client binaries missing - building locally via examples/build.sh..."
+    (cd examples && ./build.sh --rust --go)
 fi
 
 STAGE_DIR=$(mktemp -d)
@@ -234,8 +250,14 @@ done
 cp "${SCRIPT_DIR}/../celeste/tail-log.sh" "$STAGE_DIR/scripts/tail-log.sh"
 
 mkdir -p "$STAGE_DIR/examples/bin"
-cp examples/bin/client-rust examples/bin/client-go examples/bin/client-cpp "$STAGE_DIR/examples/bin/"
+cp examples/bin/client-rust examples/bin/client-go "$STAGE_DIR/examples/bin/"
 cp examples/config.toml "$STAGE_DIR/config.toml"
+
+# client-cpp source only - built on the remote box itself, not copied
+# prebuilt (see the rust/go comment above).
+mkdir -p "$STAGE_DIR/examples/cpp"
+cp examples/cpp/CMakeLists.txt examples/cpp/CMakePresets.json examples/cpp/main.cpp "$STAGE_DIR/examples/cpp/"
+cp examples/build.sh "$STAGE_DIR/examples/build.sh"
 
 log "Copying to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}..."
 ssh "${SSH_KEY_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '$REMOTE_DIR'"
@@ -246,7 +268,3 @@ DEB_BASENAME=$(basename "$DEB_PATH")
 log "Done. Files are at ${REMOTE_DIR} on the box. Next steps (manual, over your own SSH session):"
 echo
 print_next_steps "$DEB_BASENAME"
-echo
-if ! ssh "${SSH_KEY_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "dpkg -s libcurl4 || dpkg -s libcurl4t64" &>/dev/null; then
-    warn "client-cpp needs libcurl4 (+ its TLS chain) at runtime - if it fails to run, 'sudo apt install -y libcurl4t64 || sudo apt install -y libcurl4'."
-fi
