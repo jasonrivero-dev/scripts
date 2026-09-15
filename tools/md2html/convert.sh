@@ -45,14 +45,24 @@ if [[ ! -d "${SOURCE_DIR}" ]]; then
   exit 1
 fi
 
+# Resolve to an absolute path: makes the basename meaningful for inputs like
+# "-s ." or "-s ../notes", and makes the prefix-stripping below reliable
+# regardless of how the path was originally given.
+SOURCE_DIR="$(cd "${SOURCE_DIR}" && pwd)"
+
 mkdir -p "${TARGET_DIR}"
 
-shopt -s nullglob
-files=("${SOURCE_DIR}"/*.md)
+mapfile -d '' files < <(find "${SOURCE_DIR}" -type f -name '*.md' -print0 | sort -z)
 if [[ ${#files[@]} -eq 0 ]]; then
-  echo "No .md files found in ${SOURCE_DIR}"
+  echo "No .md files found under ${SOURCE_DIR}"
   exit 0
 fi
+
+# Mirror the source tree under a subfolder named after the source directory
+# itself, so different source trees (or repeated runs) don't collide or mix
+# together flat in the same target directory.
+SOURCE_BASENAME="$(basename "${SOURCE_DIR}")"
+OUTPUT_ROOT="${TARGET_DIR}/${SOURCE_BASENAME}"
 
 # Create a local puppeteer config file to bypass Chrome sandbox restrictions on Ubuntu
 cat << 'EOF' > .puppeteer.json
@@ -64,17 +74,23 @@ EOF
 trap 'rm -f .puppeteer.json' EXIT
 
 echo "Processing Markdown files from: ${SOURCE_DIR}"
-echo "Saving HTML output to:         ${TARGET_DIR}"
+echo "Saving HTML output to:         ${OUTPUT_ROOT}"
 echo "--------------------------------------------------"
 
 generated_files=()
 
 for file in "${files[@]}"; do
-  filename=$(basename "$file")
+  rel_path="${file#"${SOURCE_DIR}"/}"
+  rel_dir="$(dirname "${rel_path}")"
+  filename="$(basename "${rel_path}")"
   basename="${filename%.md}"
-  output_path="${TARGET_DIR}/${basename}.html"
 
-  echo "Converting: ${filename} -> ${basename}.html"
+  out_dir="${OUTPUT_ROOT}"
+  [[ "${rel_dir}" != "." ]] && out_dir="${OUTPUT_ROOT}/${rel_dir}"
+  mkdir -p "${out_dir}"
+  output_path="${out_dir}/${basename}.html"
+
+  echo "Converting: ${rel_path} -> ${output_path#"${TARGET_DIR}"/}"
 
   pandoc "$file" \
     --from=gfm \
@@ -92,7 +108,7 @@ for file in "${files[@]}"; do
 done
 
 echo "--------------------------------------------------"
-echo "Done! All HTML files are available in: ${TARGET_DIR}"
+echo "Done! All HTML files are available in: ${OUTPUT_ROOT}"
 
 # Open files if -o flag was passed
 if [[ "${OPEN_IN_BROWSER}" == true ]]; then
