@@ -5,3 +5,5 @@ go/
 mermaid-filter.err
 .end
 .env
+__pycache__/
+*.pyc

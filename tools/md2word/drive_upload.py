@@ -65,14 +65,18 @@ def find_or_create_folder(service, name: str, parent_id: str, cache: dict) -> st
         f"name='{safe_name}' and '{parent_id}' in parents "
         f"and mimeType='{FOLDER_MIME}' and trashed=false"
     )
-    response = service.files().list(q=query, fields="files(id,name)").execute()
+    response = (
+        service.files()
+        .list(q=query, fields="files(id,name)", supportsAllDrives=True, includeItemsFromAllDrives=True)
+        .execute()
+    )
     matches = response.get("files", [])
 
     if matches:
         folder_id = matches[0]["id"]
     else:
         body = {"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]}
-        created = service.files().create(body=body, fields="id").execute()
+        created = service.files().create(body=body, fields="id", supportsAllDrives=True).execute()
         folder_id = created["id"]
 
     cache[cache_key] = folder_id
@@ -91,7 +95,16 @@ def resolve_parent_folder(service, drive_root_id: str, rel_dir: Path, cache: dic
 def find_existing_files(service, name: str, parent_id: str) -> list:
     safe_name = escape_drive_query_value(name)
     query = f"name='{safe_name}' and '{parent_id}' in parents and trashed=false"
-    response = service.files().list(q=query, fields="files(id,name,modifiedTime)").execute()
+    response = (
+        service.files()
+        .list(
+            q=query,
+            fields="files(id,name,modifiedTime)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
+        .execute()
+    )
     return response.get("files", [])
 
 
@@ -104,13 +117,23 @@ def upload_with_retry(service, credentials, existing_id, name, parent_id, local_
             if existing_id:
                 return (
                     service.files()
-                    .update(fileId=existing_id, media_body=media, fields="id,webViewLink")
+                    .update(
+                        fileId=existing_id,
+                        media_body=media,
+                        fields="id,webViewLink",
+                        supportsAllDrives=True,
+                    )
                     .execute()
                 )
             body = {"name": name, "parents": [parent_id], "mimeType": DOC_MIME}
             return (
                 service.files()
-                .create(body=body, media_body=media, fields="id,webViewLink")
+                .create(
+                    body=body,
+                    media_body=media,
+                    fields="id,webViewLink",
+                    supportsAllDrives=True,
+                )
                 .execute()
             )
         except HttpError as e:
@@ -130,15 +153,19 @@ def upload_file(service, credentials, local_path: Path, rel_path: Path, drive_ro
     rel_dir = rel_path.parent
     name = rel_path.name
 
+    # Broad except (not just HttpError) below is deliberate: the PRD's "one file's failure
+    # doesn't abort the batch" requirement explicitly lists "expired token" as an example
+    # failure. A mid-batch token refresh failure raises google.auth.exceptions.RefreshError,
+    # not an HttpError - it must still be isolated to this one file, not crash the run.
     try:
         parent_id = resolve_parent_folder(service, drive_root_id, rel_dir, folder_cache)
-    except HttpError as e:
+    except Exception as e:
         print(f"FAILED {rel_path}: could not create/find Drive folder ({e})")
         return
 
     try:
         matches = find_existing_files(service, name, parent_id)
-    except HttpError as e:
+    except Exception as e:
         print(f"FAILED {rel_path}: could not query existing Drive files ({e})")
         return
 
@@ -156,7 +183,7 @@ def upload_file(service, credentials, local_path: Path, rel_path: Path, drive_ro
                 f"WARN {rel_path}: {len(matches)} duplicate names found in Drive, "
                 f"updated the most recently modified -> {result.get('webViewLink')}"
             )
-    except HttpError as e:
+    except Exception as e:
         print(f"FAILED {rel_path}: Drive upload failed ({e})")
 
 
@@ -183,7 +210,17 @@ def main():
         print(f"No .docx files found under {args.local_root}", file=sys.stderr)
         sys.exit(0)
 
-    credentials = get_credentials(args.client_secret, args.token_cache)
+    try:
+        credentials = get_credentials(args.client_secret, args.token_cache)
+    except Exception as exc:
+        print(
+            f"FAILED startup: could not obtain Drive credentials ({exc}). "
+            f"Delete {args.token_cache} to force a fresh sign-in, or re-check the "
+            "one-time setup in tools/md2word/README.md.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     service = build("drive", "v3", credentials=credentials)
 
     folder_cache: dict = {}
