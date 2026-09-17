@@ -11,7 +11,7 @@ The repo is organized by topic:
 | [`celeste/`](celeste/) | Celeste host build, launch, setup, logging, coverage, metrics/PLC helpers, FFmpeg crash repro |
 | [`licensing/`](licensing/) | `novarc-licensing` CLI wrapper, EC2 QA deploy/uninstall, Keygen checkout test, TPM hardware ID |
 | [`telemetry/`](telemetry/) | Vector/Prometheus/Grafana stack control, test environment loader, mocks, configure templates |
-| [`tools/`](tools/) | Diverse one-off utilities: Jira CLI wrappers, Markdown-to-HTML converter |
+| [`tools/`](tools/) | Diverse one-off utilities: Jira CLI wrappers, Markdown-to-HTML converter, Markdown-to-Google-Docs converter |
 | [`lib/`](lib/) | Shared logging helpers sourced by scripts in `celeste/` and `telemetry/` |
 | [`docs/`](docs/) | Personal VS Code how-to and IDE troubleshooting notes |
 | [`gen-coverage.sh`](gen-coverage.sh) | The one script that stays at repo root — see [Coverage](#coverage) below |
@@ -54,6 +54,7 @@ Several scripts change system state, require `sudo`, contact external services, 
 - `licensing/keygen/test_keygen.sh` reads local Keygen credentials from files under `~/dev` and sends a request to Keygen.
 - `licensing/licadmin` generates signing material and can install licenses into a running system daemon.
 - `licensing/licadmin-ec2-deploy --uninstall` purges the `novarc-licensing` package and deletes the deploy directory on the configured EC2 box after a confirmation prompt.
+- `tools/md2word/convert.sh` uploads to Google Drive using an OAuth client secret and cached token, both defaulting to `$HOME/.config/md2word/` — entirely outside this repository. Never commit either; if you ever point `MD2WORD_CLIENT_SECRET`/`MD2WORD_TOKEN_CACHE` at a path inside the repo, gitignore it first.
 - `telemetry/sync_telemetry.sh reset` deletes Vector state and logs under `/var/lib/vector` and `/var/log/vector`.
 - The telemetry mock scripts append data directly to production-style log paths. Use them only on an intended test host.
 
@@ -67,6 +68,7 @@ Install only the dependencies needed for the workflow you are using. Common requ
 - Celeste host development: a sibling checkout at `~/dev/celeste`, CMake, Ninja, Conan, a C++ toolchain, CUDA/NVCC, libtorch, and Celeste's third-party dependencies. Run `~/dev/celeste/build.sh --setup-clion` first.
 - Coverage: `lcov` and `genhtml`.
 - Markdown conversion: Pandoc, Node.js/npm, `mermaid-filter`, Chromium-compatible browser tooling, and `xdg-open` when using browser output.
+- Markdown to Google Docs: the above, plus Python 3 and `pip install -r tools/md2word/requirements.txt`, plus a one-time Google Cloud OAuth setup (see `tools/md2word/README.md`).
 - Licensing: Rust/Cargo, the separate `~/dev/Licensing` and `~/dev/licensing-poc` checkouts, and optionally the installed `lictl` command.
 - Telemetry: Docker, Vector `0.56.0`, AWS credentials, and the target Novarc service configuration. `sudo ./telemetry/install_metrics_deps.sh` installs or verifies several host dependencies.
 - Jira: the Jira CLI (`jira`) and a valid API token in the location expected by the Jira scripts.
@@ -324,6 +326,19 @@ Convert all Markdown files in a directory into standalone HTML with a table of c
 ```
 
 The default target is `~/Documents`. The converter uses [`tools/md2html/novarc.css`](tools/md2html/novarc.css), [`tools/md2html/header.html`](tools/md2html/header.html), and the `mermaid-filter` executable. It writes a temporary `.puppeteer.json` in the current working directory and removes it on exit.
+
+### Markdown to Google Docs
+
+A separate tool from `md2html` above — does not touch it. Converts Markdown to `.docx`
+locally (mirroring the source tree, same pattern as `md2html`), then uploads each file to a
+Google Drive folder as a native Google Doc:
+
+```bash
+tools/md2word/convert.sh -s /path/to/markdown -g <drive_folder_id>
+tools/md2word/convert.sh -s /path/to/markdown -n   # local .docx only, no Drive upload
+```
+
+Requires a one-time Google Cloud OAuth setup — see [`tools/md2word/README.md`](tools/md2word/README.md). Re-running against an already-uploaded file overwrites the existing Google Doc in place rather than creating a duplicate.
 
 ## lib/
 
