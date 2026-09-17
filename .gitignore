@@ -3,3 +3,5 @@ tools/md2html/mermaid-filter.err
 tools/jiracli/token
 go/
 mermaid-filter.err
+.end
+.env
