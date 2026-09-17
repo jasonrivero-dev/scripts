@@ -1,0 +1,81 @@
+# md2word
+
+Converts a Markdown source tree to `.docx` files (mirroring the source folder structure
+locally, same pattern as `tools/md2html/convert.sh`), then uploads each `.docx` to a Google
+Drive folder, forcing conversion into a native Google Doc on upload. Separate from
+`tools/md2html/convert.sh` — does not touch it.
+
+## One-time setup
+
+You need a Google Cloud OAuth 2.0 client before this tool can upload anything. This is a
+one-time setup per machine.
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com/) and create a new
+   project (or select an existing one you're comfortable using for this).
+2. In **APIs & Services → Library**, search for **Google Drive API** and enable it for that
+   project.
+3. In **APIs & Services → Credentials**, click **Create Credentials → OAuth client ID**.
+   - If prompted to configure the OAuth consent screen first, choose **External** (or
+     **Internal** if you're on a Google Workspace account restricted to your own org),
+     fill in the required fields (app name, your email), and add yourself as a test user.
+   - For the client ID itself, choose Application type **Desktop app**, give it any name.
+4. Click **Download JSON** on the created client. This file is your `client_secret.json`.
+5. Move it to `$HOME/.config/md2word/client_secret.json`:
+   ```bash
+   mkdir -p ~/.config/md2word
+   mv ~/Downloads/client_secret_*.json ~/.config/md2word/client_secret.json
+   ```
+   (Or leave it anywhere and point `MD2WORD_CLIENT_SECRET` at it instead — see Environment
+   variables below.)
+6. Install the Python dependencies:
+   ```bash
+   pip install -r tools/md2word/requirements.txt
+   ```
+
+The first time you run `convert.sh` with Drive upload enabled, it opens a browser window
+asking you to authorize the app against your own Google account. After you approve, a token
+is cached at `$HOME/.config/md2word/token.json` (also relocatable via `MD2WORD_TOKEN_CACHE`)
+and refreshed automatically — you won't be prompted again on later runs unless that file is
+deleted or access is revoked.
+
+## Usage
+
+```bash
+tools/md2word/convert.sh -s <source_dir> -g <drive_folder_id> [-t <target_dir>] [-n]
+```
+
+| Flag | Required | Default | Meaning |
+|---|---|---|---|
+| `-s`, `--source` | yes | — | Markdown source directory (searched recursively) |
+| `-g`, `--drive-folder` | yes | — | Destination Google Drive folder ID (no default — always explicit) |
+| `-t`, `--target` | no | `~/Documents` | Local directory to stage the generated `.docx` tree in |
+| `-c`, `--client-secret` | no | `$HOME/.config/md2word/client_secret.json` | Path to the OAuth client secret JSON (see setup above) |
+| `-k`, `--token-cache` | no | `$HOME/.config/md2word/token.json` | Path to the cached OAuth token |
+| `-n`, `--no-upload` | no | off | Convert to local `.docx` only; skip the Drive upload step entirely |
+| `-h`, `--help` | no | — | Show usage |
+
+Both `-c`/`-k` also read from `MD2WORD_CLIENT_SECRET` / `MD2WORD_TOKEN_CACHE` env vars if the
+flags aren't given.
+
+## Re-running against the same files
+
+Re-running against a file you've already uploaded **overwrites** the existing Google Doc's
+content in place (matched by filename within its Drive folder) rather than creating a
+duplicate. If more than one file with that name already exists in the target Drive folder
+(Drive allows duplicate names, unlike a filesystem), the most-recently-modified one is
+overwritten and a warning is printed naming the duplicate count — you may want to clean up
+the stray copies in Drive yourself.
+
+## Diagrams
+
+Mermaid code blocks are rendered via the same `mermaid-filter` used by `tools/md2html`. Word
+document rendering of embedded images can differ from HTML in sizing — if a diagram looks
+wrong in the resulting Doc, that's a known conversion risk, not a bug you need to chase; open
+an issue for yourself to investigate a fallback (pre-rendering with `mmdc` into a fixed-size
+PNG) if it comes up in practice.
+
+## Where secrets live
+
+`client_secret.json` and the token cache both default to `$HOME/.config/md2word/`, entirely
+outside this repository — never commit either. If you ever point `MD2WORD_CLIENT_SECRET` or
+`MD2WORD_TOKEN_CACHE` at a path inside this repo, add that path to `.gitignore` first.
