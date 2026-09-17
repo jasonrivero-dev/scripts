@@ -5,11 +5,24 @@ Agent handles — iterates until zero errors.
 ## Steps
 
 1. Detect the tech stack by reading project config files:
+   - No `package.json` / `pyproject.toml` / `go.mod`, mostly `.sh` (+ occasional `.py`) files →
+     **Bash/shell scripts (this repo's actual stack — see `## Structural Overrides` in
+     `CLAUDE.md`)**
    - `package.json` / `tsconfig.json` → TypeScript/JavaScript
    - `pyproject.toml` / `setup.py` → Python
    - `go.mod` → Go
 
 2. Run the appropriate commands:
+
+   **Bash / shell scripts (this repo):**
+   ```bash
+   bash -n <changed-file>   # for each changed .sh file - syntax check only
+   ```
+
+   No linter is installed or configured (`shellcheck` is not present on this machine) — this
+   is a documented override, not a gap to silently work around. `bash -n` only catches syntax
+   errors, not style/correctness issues, so also read the diff for obvious problems (unquoted
+   expansions, missing `set -e`, etc.) as part of this pass.
 
    **TypeScript / JavaScript:**
    ```bash

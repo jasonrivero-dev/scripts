@@ -98,12 +98,23 @@ that mistake again. This file compounds over time.
 > when the template is adopted on a project that already has code.
 > If empty, this is a fresh project with no existing application yet.
 
-**What this app does:** (not yet defined — run `/project-init` if this template was adopted
-on an existing codebase)
+**What this app does:** A personal collection of Bash (and one Python) scripts for local
+development, build/test, telemetry, licensing QA, and diagnostics work alongside the
+Novarc/Celeste software stack. Not a standalone application — each script is an independent
+operational tool, run manually from the command line.
 
-**Domain / users:** (none yet)
+**Domain / users:** Internal tooling for a single developer working on Novarc's Celeste
+product and the novarc-licensing product; used on a personal dev machine and to
+build/deploy/QA an EC2 licensing box.
 
-**Main components:** (none yet)
+**Main components:**
+
+- `celeste/` — build/launch/log tooling for Celeste (incl. `ffmpeg-crash/` crash repro)
+- `licensing/` — `novarc-licensing` CLI wrapper, EC2 deploy/uninstall, hardware-ID/Keygen/TPM
+- `telemetry/` — Vector/Prometheus/Grafana stack control, mocks, configure templates
+- `tools/` — Jira CLI wrappers, Markdown-to-HTML converter
+- `lib/` — shared logging helper sourced by `celeste/` and `telemetry/` scripts
+- `docs/` — personal VS Code how-to and IDE troubleshooting notes
 
 ---
 
@@ -114,24 +125,31 @@ on an existing codebase)
 
 | Convention | Template Default | This Project | Reason | Date |
 |------------|-----------------|--------------|--------|------|
-| (none yet — run `/project-init` on first setup) | | | | |
+| Tech stack | TypeScript/JS (or Python/Go) app | Bash shell scripts (+ one Python script), no package manager, no framework | Repo is a personal collection of independent ops/dev scripts, not an app | 2026-09-17 |
+| Layer 1 (lint/typecheck) | `npx tsc --noEmit && npx eslint .` | No lint tooling configured; `bash -n <file>` per changed script | `shellcheck` isn't installed; no lint config exists today | 2026-09-17 |
+| Layer 2 (unit tests) | `npx vitest run` / `npm test` | No automated test framework; manual dry-run against scratch fixtures | No JS/Python/Go test runner applies; verification has been manual all along (e.g. `licadmin-ec2-deploy` flag parser, `md2html/convert.sh` tree mirroring) | 2026-09-17 |
+| Layer 3 (integration/E2E) | `npx playwright test` | No E2E framework; manual end-to-end dry-run per script, noting anything needing a real remote/hardware check | No web app/service boundary exists to test against | 2026-09-17 |
 
 ---
 
 ## Project State
 
-> Maintained by `/sync`. Run `/sync` after each TRD approval, architectural change, or deprecation.
-> Last updated: (not yet synced — run `/sync` after the first TRD is approved)
+> Maintained by `/sync`. Last updated: 2026-09-17.
+> Run `/sync` after each TRD approval, architectural change, or deprecation.
 
 ### Architecture
 
-(Not yet defined. Will be populated after first `/sync`.)
+A topic-organized collection of independent Bash (+ one Python) scripts, not a layered
+application — no shared runtime, no database, no framework. Each top-level folder
+(`celeste/`, `licensing/`, `telemetry/`, `tools/`) is a self-contained set of scripts for one
+area of work; `lib/` holds the one piece shared across folders (`dev-log-lib`, sourced by
+`celeste/` and `telemetry/` scripts for consistent log formatting).
 
 ### Active Features
 
 | Feature | Status | Key Additions |
 |---------|--------|---------------|
-| (none yet) | | |
+| (none yet — `projects/` has no feature subdirectories) | | |
 
 ### Deprecated
 
