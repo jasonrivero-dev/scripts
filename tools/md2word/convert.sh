@@ -89,6 +89,18 @@ if [[ ${#files[@]} -eq 0 ]]; then
     exit 0
 fi
 
+# Create a local puppeteer config file to bypass Chrome sandbox restrictions on Ubuntu
+# (same reason tools/md2html/convert.sh does this - mermaid-filter's mmdc launches
+# Chromium via Puppeteer, which otherwise fails with "No usable sandbox!").
+cat << 'EOF' > .puppeteer.json
+{
+  "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+}
+EOF
+
+UPLOAD_LOG=""
+trap 'rm -f .puppeteer.json; [[ -n "$UPLOAD_LOG" ]] && rm -f "$UPLOAD_LOG"' EXIT
+
 SOURCE_BASENAME="$(basename "$SOURCE_DIR")"
 OUTPUT_ROOT="${TARGET_DIR}/${SOURCE_BASENAME}"
 
@@ -127,7 +139,6 @@ fi
 log "Uploading to Google Drive folder ${DRIVE_FOLDER}..."
 
 UPLOAD_LOG="$(mktemp)"
-trap 'rm -f "$UPLOAD_LOG"' EXIT
 
 set +e
 python3 "${SCRIPT_DIR}/drive_upload.py" \
