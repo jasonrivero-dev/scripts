@@ -151,7 +151,13 @@ def upload_with_retry(service, credentials, existing_id, name, parent_id, local_
 
 def upload_file(service, credentials, local_path: Path, rel_path: Path, drive_root_id: str, folder_cache: dict, progress: str):
     rel_dir = rel_path.parent
-    name = rel_path.name
+    # Drive strips the .docx extension when it converts an upload into a native Google
+    # Doc (a converted Doc is not a .docx container - Drive names it without the
+    # extension, matching what the Drive UI shows). Search and create using that same
+    # extension-less name, or a same-name lookup on a later run would never match the
+    # file this tool already created, and would create a brand new Doc every time
+    # instead of overwriting it.
+    doc_name = rel_path.stem
 
     print(f"{progress} Uploading {rel_path}...")
 
@@ -166,21 +172,21 @@ def upload_file(service, credentials, local_path: Path, rel_path: Path, drive_ro
         return
 
     try:
-        matches = find_existing_files(service, name, parent_id)
+        matches = find_existing_files(service, doc_name, parent_id)
     except Exception as e:
         print(f"FAILED {progress} {rel_path}: could not query existing Drive files ({e})")
         return
 
     try:
         if len(matches) == 0:
-            result = upload_with_retry(service, credentials, None, name, parent_id, local_path)
+            result = upload_with_retry(service, credentials, None, doc_name, parent_id, local_path)
             print(f"UPLOADED {progress} {rel_path} -> {result.get('webViewLink')}")
         elif len(matches) == 1:
-            result = upload_with_retry(service, credentials, matches[0]["id"], name, parent_id, local_path)
+            result = upload_with_retry(service, credentials, matches[0]["id"], doc_name, parent_id, local_path)
             print(f"UPDATED {progress} {rel_path} -> {result.get('webViewLink')}")
         else:
             most_recent = sorted(matches, key=lambda f: f["modifiedTime"], reverse=True)[0]
-            result = upload_with_retry(service, credentials, most_recent["id"], name, parent_id, local_path)
+            result = upload_with_retry(service, credentials, most_recent["id"], doc_name, parent_id, local_path)
             print(
                 f"WARN {progress} {rel_path}: {len(matches)} duplicate names found in Drive, "
                 f"updated the most recently modified -> {result.get('webViewLink')}"
