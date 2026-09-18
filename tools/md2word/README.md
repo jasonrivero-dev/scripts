@@ -51,18 +51,26 @@ deleted or access is revoked.
 ## Usage
 
 ```bash
-tools/md2word/convert.sh -s <source_dir> -g <drive_folder_id> [-t <target_dir>] [-n]
+tools/md2word/convert.sh -s <source_dir> -g <drive_folder_id> [-t <target_dir>] [-n|-u]
 ```
 
 | Flag | Required | Default | Meaning |
 |---|---|---|---|
-| `-s`, `--source` | yes | — | Markdown source directory (searched recursively) |
+| `-s`, `--source` | yes | — | Markdown source directory (searched recursively); with `-u`, an existing `.docx` tree instead |
 | `-g`, `--drive-folder` | yes | — | Destination Google Drive folder ID (no default — always explicit) |
-| `-t`, `--target` | no | `~/Documents/md2word` | Local directory to stage the generated `.docx` tree in |
+| `-t`, `--target` | no | `~/Documents/md2word` | Local directory to stage the generated `.docx` tree in (ignored with `-u`) |
 | `-c`, `--client-secret` | no | `$HOME/.config/md2word/client_secret.json` | Path to the OAuth client secret JSON (see setup above) |
 | `-k`, `--token-cache` | no | `$HOME/.config/md2word/token.json` | Path to the cached OAuth token |
 | `-n`, `--no-upload` | no | off | Convert to local `.docx` only; skip the Drive upload step entirely |
+| `-u`, `--upload-only` | no | off | Skip Markdown conversion; upload the existing `.docx` tree at `-s` as-is |
 | `-h`, `--help` | no | — | Show usage |
+
+`-n` and `-u` are opposites and can't be combined. `-u` is for uploading `.docx` files you
+already have (from a previous run, or from anywhere else) without re-converting anything:
+
+```bash
+tools/md2word/convert.sh -s ~/Documents/md2word/docs -g <drive_folder_id> -u
+```
 
 Both `-c`/`-k` also read from `MD2WORD_CLIENT_SECRET` / `MD2WORD_TOKEN_CACHE` env vars if the
 flags aren't given.

@@ -335,7 +335,8 @@ Google Drive folder as a native Google Doc:
 
 ```bash
 tools/md2word/convert.sh -s /path/to/markdown -g <drive_folder_id>
-tools/md2word/convert.sh -s /path/to/markdown -n   # local .docx only, no Drive upload
+tools/md2word/convert.sh -s /path/to/markdown -n                  # local .docx only, no Drive upload
+tools/md2word/convert.sh -s /path/to/existing/docx -g <id> -u     # upload an existing .docx tree as-is, no conversion
 ```
 
 Requires a one-time Google Cloud OAuth setup — see [`tools/md2word/README.md`](tools/md2word/README.md). Re-running against an already-uploaded file overwrites the existing Google Doc in place rather than creating a duplicate.
