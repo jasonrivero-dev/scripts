@@ -108,6 +108,69 @@ def find_existing_files(service, name: str, parent_id: str) -> list:
     return response.get("files", [])
 
 
+def fetch_comments(service, file_id: str) -> list:
+    """Fetches all (non-deleted) comments + replies on a file, before its content is
+    replaced. A content-replacing files().update() wipes existing comments outright (not
+    just their anchors) - this must be called before that update, not after."""
+    comments = []
+    page_token = None
+    while True:
+        response = (
+            service.comments()
+            .list(
+                fileId=file_id,
+                fields=(
+                    "nextPageToken,comments(content,author(displayName),createdTime,"
+                    "replies(content,author(displayName),createdTime))"
+                ),
+                pageToken=page_token,
+            )
+            .execute()
+        )
+        comments.extend(response.get("comments", []))
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+    return comments
+
+
+def _attributed_text(item: dict) -> str:
+    author = item.get("author", {}).get("displayName", "Unknown")
+    created = item.get("createdTime", "")
+    date_str = created.split("T")[0] if created else "unknown date"
+    return f"[Originally by {author}, {date_str}] {item.get('content', '')}"
+
+
+def restore_comments(service, file_id: str, comments: list) -> int:
+    """Re-posts previously-fetched comments (with reply threading) onto file_id as new,
+    unanchored comments - the best available approximation given the Drive API cannot
+    preserve the original anchor, author identity, or created timestamp on a repost.
+    Best-effort: one comment/reply failing to restore does not abort the rest."""
+    restored = 0
+    for comment in comments:
+        try:
+            created = (
+                service.comments()
+                .create(fileId=file_id, body={"content": _attributed_text(comment)}, fields="id")
+                .execute()
+            )
+        except Exception:
+            continue
+        comment_id = created["id"]
+        restored += 1
+        for reply in comment.get("replies", []):
+            try:
+                service.replies().create(
+                    fileId=file_id,
+                    commentId=comment_id,
+                    body={"content": _attributed_text(reply)},
+                    fields="id",
+                ).execute()
+            except Exception:
+                continue
+    return restored
+
+
 def upload_with_retry(service, credentials, existing_id, name, parent_id, local_path):
     rate_limit_attempts = 0
     refreshed_once = False
@@ -181,16 +244,33 @@ def upload_file(service, credentials, local_path: Path, rel_path: Path, drive_ro
         if len(matches) == 0:
             result = upload_with_retry(service, credentials, None, doc_name, parent_id, local_path)
             print(f"UPLOADED {progress} {rel_path} -> {result.get('webViewLink')}")
-        elif len(matches) == 1:
-            result = upload_with_retry(service, credentials, matches[0]["id"], doc_name, parent_id, local_path)
+            return
+
+        target = matches[0] if len(matches) == 1 else sorted(matches, key=lambda f: f["modifiedTime"], reverse=True)[0]
+
+        # A content-replacing update wipes existing comments outright, not just their
+        # anchors - must fetch them before the overwrite, not after. Best-effort: if this
+        # fails, proceed with the overwrite anyway rather than blocking on it (the upload
+        # itself is the point; comment restoration is a bonus, not a hard dependency).
+        existing_comments = []
+        try:
+            existing_comments = fetch_comments(service, target["id"])
+        except Exception as e:
+            print(f"WARN {progress} {rel_path}: could not fetch existing comments before overwrite ({e}); proceeding without them")
+
+        result = upload_with_retry(service, credentials, target["id"], doc_name, parent_id, local_path)
+
+        restored = restore_comments(service, target["id"], existing_comments) if existing_comments else 0
+
+        if len(matches) == 1:
             print(f"UPDATED {progress} {rel_path} -> {result.get('webViewLink')}")
         else:
-            most_recent = sorted(matches, key=lambda f: f["modifiedTime"], reverse=True)[0]
-            result = upload_with_retry(service, credentials, most_recent["id"], doc_name, parent_id, local_path)
             print(
                 f"WARN {progress} {rel_path}: {len(matches)} duplicate names found in Drive, "
                 f"updated the most recently modified -> {result.get('webViewLink')}"
             )
+        if restored:
+            print(f"  -> restored {restored} comment thread(s) as new, unanchored comments (see help for why)")
     except Exception as e:
         print(f"FAILED {progress} {rel_path}: Drive upload failed ({e})")
 

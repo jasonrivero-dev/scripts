@@ -95,6 +95,32 @@ duplicate. If more than one file with that name already exists in the target Dri
 overwritten and a warning is printed naming the duplicate count — you may want to clean up
 the stray copies in Drive yourself.
 
+### What happens to comments on an overwrite
+
+Overwriting a Doc's content wipes any comments stakeholders left on it — not just their
+highlighted anchor, the comment threads themselves. To avoid losing feedback, every
+overwrite automatically:
+
+1. Fetches the existing Doc's comments (and their replies) **before** the content is
+   replaced.
+2. Reposts each one **after** the overwrite, as a new comment on the same Doc, prefixed
+   with who originally wrote it and when — e.g. `[Originally by Jane Reviewer,
+   2026-09-17] I hope this comment survives`.
+
+This is a best-effort repost, not a true restoration — two real limitations, both hard API
+constraints rather than a choice made here:
+
+- **No anchor.** The restored comment is a general, whole-document comment. It won't
+  highlight the specific sentence the original comment was attached to.
+- **No real authorship.** Drive attributes every newly-created comment to whoever is
+  authenticated when the script runs (you), with today's date — there's no way to make the
+  API repost it as if the original reviewer wrote it. The original author/date is preserved
+  as text inside the comment instead (see the prefix above), not as real comment metadata.
+
+If fetching the existing comments fails for any reason (e.g. a permissions issue), the tool
+warns and still completes the overwrite — comment restoration is a bonus on top of the
+upload, never a reason to block it.
+
 ## Diagrams
 
 Mermaid code blocks are rendered via the same `mermaid-filter` used by `tools/md2html`. Word
