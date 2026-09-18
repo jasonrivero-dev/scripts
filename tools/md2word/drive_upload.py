@@ -149,9 +149,11 @@ def upload_with_retry(service, credentials, existing_id, name, parent_id, local_
             raise
 
 
-def upload_file(service, credentials, local_path: Path, rel_path: Path, drive_root_id: str, folder_cache: dict):
+def upload_file(service, credentials, local_path: Path, rel_path: Path, drive_root_id: str, folder_cache: dict, progress: str):
     rel_dir = rel_path.parent
     name = rel_path.name
+
+    print(f"{progress} Uploading {rel_path}...")
 
     # Broad except (not just HttpError) below is deliberate: the PRD's "one file's failure
     # doesn't abort the batch" requirement explicitly lists "expired token" as an example
@@ -160,34 +162,39 @@ def upload_file(service, credentials, local_path: Path, rel_path: Path, drive_ro
     try:
         parent_id = resolve_parent_folder(service, drive_root_id, rel_dir, folder_cache)
     except Exception as e:
-        print(f"FAILED {rel_path}: could not create/find Drive folder ({e})")
+        print(f"FAILED {progress} {rel_path}: could not create/find Drive folder ({e})")
         return
 
     try:
         matches = find_existing_files(service, name, parent_id)
     except Exception as e:
-        print(f"FAILED {rel_path}: could not query existing Drive files ({e})")
+        print(f"FAILED {progress} {rel_path}: could not query existing Drive files ({e})")
         return
 
     try:
         if len(matches) == 0:
             result = upload_with_retry(service, credentials, None, name, parent_id, local_path)
-            print(f"UPLOADED {rel_path} -> {result.get('webViewLink')}")
+            print(f"UPLOADED {progress} {rel_path} -> {result.get('webViewLink')}")
         elif len(matches) == 1:
             result = upload_with_retry(service, credentials, matches[0]["id"], name, parent_id, local_path)
-            print(f"UPDATED {rel_path} -> {result.get('webViewLink')}")
+            print(f"UPDATED {progress} {rel_path} -> {result.get('webViewLink')}")
         else:
             most_recent = sorted(matches, key=lambda f: f["modifiedTime"], reverse=True)[0]
             result = upload_with_retry(service, credentials, most_recent["id"], name, parent_id, local_path)
             print(
-                f"WARN {rel_path}: {len(matches)} duplicate names found in Drive, "
+                f"WARN {progress} {rel_path}: {len(matches)} duplicate names found in Drive, "
                 f"updated the most recently modified -> {result.get('webViewLink')}"
             )
     except Exception as e:
-        print(f"FAILED {rel_path}: Drive upload failed ({e})")
+        print(f"FAILED {progress} {rel_path}: Drive upload failed ({e})")
 
 
 def main():
+    # Force line-buffering even when stdout is piped (convert.sh pipes this through `tee`
+    # for its live progress display) - otherwise Python fully buffers non-tty stdout and
+    # nothing appears until the process exits, defeating the point of per-file progress.
+    sys.stdout.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser(
         description="Upload a local .docx tree to Google Drive as native Google Docs."
     )
@@ -224,9 +231,11 @@ def main():
     service = build("drive", "v3", credentials=credentials)
 
     folder_cache: dict = {}
-    for local_path in docx_files:
+    total = len(docx_files)
+    for index, local_path in enumerate(docx_files, start=1):
         rel_path = local_path.relative_to(args.local_root)
-        upload_file(service, credentials, local_path, rel_path, args.drive_folder_id, folder_cache)
+        progress = f"[{index}/{total}]"
+        upload_file(service, credentials, local_path, rel_path, args.drive_folder_id, folder_cache, progress)
 
 
 if __name__ == "__main__":

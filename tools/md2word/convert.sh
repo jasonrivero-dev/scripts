@@ -29,7 +29,7 @@ error() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SOURCE_DIR=""
-TARGET_DIR="$HOME/Documents"
+TARGET_DIR="$HOME/Documents/md2word"
 DRIVE_FOLDER=""
 CLIENT_SECRET="${MD2WORD_CLIENT_SECRET:-$HOME/.config/md2word/client_secret.json}"
 TOKEN_CACHE="${MD2WORD_TOKEN_CACHE:-$HOME/.config/md2word/token.json}"
@@ -39,7 +39,7 @@ usage() {
     echo "Usage: $(basename "$0") -s <source_dir> -g <drive_folder_id> [-t <target_dir>] [-c <client_secret>] [-k <token_cache>] [-n]"
     echo "  -s, --source          Source directory containing .md files, searched recursively (required)"
     echo "  -g, --drive-folder    Destination Google Drive folder ID (required unless -n/--no-upload)"
-    echo "  -t, --target          Local directory to stage generated .docx files in (default: ~/Documents)"
+    echo "  -t, --target          Local directory to stage generated .docx files in (default: ~/Documents/md2word)"
     echo "  -c, --client-secret   OAuth client secret JSON path (default: \$MD2WORD_CLIENT_SECRET or ~/.config/md2word/client_secret.json)"
     echo "  -k, --token-cache     Cached OAuth token path (default: \$MD2WORD_TOKEN_CACHE or ~/.config/md2word/token.json)"
     echo "  -n, --no-upload       Convert to local .docx only; skip the Drive upload step"

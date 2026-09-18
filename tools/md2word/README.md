@@ -58,7 +58,7 @@ tools/md2word/convert.sh -s <source_dir> -g <drive_folder_id> [-t <target_dir>] 
 |---|---|---|---|
 | `-s`, `--source` | yes | — | Markdown source directory (searched recursively) |
 | `-g`, `--drive-folder` | yes | — | Destination Google Drive folder ID (no default — always explicit) |
-| `-t`, `--target` | no | `~/Documents` | Local directory to stage the generated `.docx` tree in |
+| `-t`, `--target` | no | `~/Documents/md2word` | Local directory to stage the generated `.docx` tree in |
 | `-c`, `--client-secret` | no | `$HOME/.config/md2word/client_secret.json` | Path to the OAuth client secret JSON (see setup above) |
 | `-k`, `--token-cache` | no | `$HOME/.config/md2word/token.json` | Path to the cached OAuth token |
 | `-n`, `--no-upload` | no | off | Convert to local `.docx` only; skip the Drive upload step entirely |
