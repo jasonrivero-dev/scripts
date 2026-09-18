@@ -14,20 +14,30 @@ one-time setup per machine.
    project (or select an existing one you're comfortable using for this).
 2. In **APIs & Services → Library**, search for **Google Drive API** and enable it for that
    project.
-3. In **APIs & Services → Credentials**, click **Create Credentials → OAuth client ID**.
-   - If prompted to configure the OAuth consent screen first, choose **External** (or
-     **Internal** if you're on a Google Workspace account restricted to your own org),
-     fill in the required fields (app name, your email), and add yourself as a test user.
-   - For the client ID itself, choose Application type **Desktop app**, give it any name.
-4. Click **Download JSON** on the created client. This file is your `client_secret.json`.
-5. Move it to `$HOME/.config/md2word/client_secret.json`:
+3. Go to **Google Auth Platform** (Google's current name for what used to be called "OAuth
+   consent screen" — reachable from the left nav, or via
+   `console.cloud.google.com/auth/overview?project=<your-project-id>`).
+   - If this is the first OAuth client on this project, the Overview page will say "You
+     haven't configured any OAuth clients for this project yet" with a **Create OAuth
+     client** button. Clicking it first walks you through **Branding** and **Audience**
+     setup (app name, support email, user type — choose **External** unless you're on a
+     Workspace account restricted to your own org — and adding yourself as a test user).
+     This is the modern equivalent of the old "consent screen" step.
+   - Once that's done, go to **Clients → Create client** (or use the Overview page's
+     **Create OAuth client** button again).
+4. On the **Create OAuth client ID** page, set **Application type** to **Desktop app** (it's
+   one of the options in that dropdown, alongside Web application/Android/iOS/etc.), give it
+   any name, and click **Create**.
+5. Download the resulting JSON as your `client_secret.json` (a download option appears right
+   after creation, or from the client's row under **Clients** afterward).
+6. Move it to `$HOME/.config/md2word/client_secret.json`:
    ```bash
    mkdir -p ~/.config/md2word
    mv ~/Downloads/client_secret_*.json ~/.config/md2word/client_secret.json
    ```
    (Or leave it anywhere and point `MD2WORD_CLIENT_SECRET` at it instead — see Environment
    variables below.)
-6. Install the Python dependencies:
+7. Install the Python dependencies:
    ```bash
    pip install -r tools/md2word/requirements.txt
    ```
