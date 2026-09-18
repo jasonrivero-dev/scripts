@@ -35,15 +35,19 @@ CLIENT_SECRET="${MD2WORD_CLIENT_SECRET:-$HOME/.config/md2word/client_secret.json
 TOKEN_CACHE="${MD2WORD_TOKEN_CACHE:-$HOME/.config/md2word/token.json}"
 NO_UPLOAD=false
 UPLOAD_ONLY=false
+PATTERN="*"
 
 usage() {
-    echo "Usage: $(basename "$0") -s <source_dir> -g <drive_folder_id> [-t <target_dir>] [-c <client_secret>] [-k <token_cache>] [-n|-u]"
+    echo "Usage: $(basename "$0") -s <source_dir> -g <drive_folder_id> [-t <target_dir>] [-c <client_secret>] [-k <token_cache>] [-p <pattern>] [-n|-u]"
     echo "  -s, --source          Source directory (required) - .md files to convert, or an"
     echo "                        existing .docx tree if -u/--upload-only is given"
     echo "  -g, --drive-folder    Destination Google Drive folder ID (required unless -n/--no-upload)"
     echo "  -t, --target          Local directory to stage generated .docx files in (default: ~/Documents/md2word; ignored with -u)"
     echo "  -c, --client-secret   OAuth client secret JSON path (default: \$MD2WORD_CLIENT_SECRET or ~/.config/md2word/client_secret.json)"
     echo "  -k, --token-cache     Cached OAuth token path (default: \$MD2WORD_TOKEN_CACHE or ~/.config/md2word/token.json)"
+    echo "  -p, --pattern         Glob matched against filenames (without extension), searched"
+    echo "                        recursively under -s (default: *, i.e. everything). Quote it"
+    echo "                        so your shell doesn't expand it, e.g. -p \"CUSTOM*\""
     echo "  -n, --no-upload       Convert to local .docx only; skip the Drive upload step"
     echo "  -u, --upload-only     Skip Markdown conversion; upload the existing .docx tree at -s as-is"
     echo "  -h, --help            Show this help"
@@ -57,6 +61,7 @@ while [[ $# -gt 0 ]]; do
         -g|--drive-folder) DRIVE_FOLDER="$2"; shift 2 ;;
         -c|--client-secret) CLIENT_SECRET="$2"; shift 2 ;;
         -k|--token-cache) TOKEN_CACHE="$2"; shift 2 ;;
+        -p|--pattern) PATTERN="$2"; shift 2 ;;
         -n|--no-upload) NO_UPLOAD=true; shift ;;
         -u|--upload-only) UPLOAD_ONLY=true; shift ;;
         *) error "Unknown argument: $1"; usage; exit 1 ;;
@@ -98,13 +103,13 @@ if [[ "$UPLOAD_ONLY" == true ]]; then
     # extra staging step. TARGET_DIR/SOURCE_BASENAME nesting doesn't apply here since we're
     # not writing anything locally.
     OUTPUT_ROOT="$SOURCE_DIR"
-    log "Skipping conversion (-u/--upload-only given). Uploading existing .docx tree from: ${OUTPUT_ROOT}"
+    log "Skipping conversion (-u/--upload-only given). Uploading existing .docx tree from: ${OUTPUT_ROOT} (pattern: ${PATTERN}.docx)"
 else
     mkdir -p "$TARGET_DIR"
 
-    mapfile -d '' files < <(find "$SOURCE_DIR" -type f -name '*.md' -print0 | sort -z)
+    mapfile -d '' files < <(find "$SOURCE_DIR" -type f -name "${PATTERN}.md" -print0 | sort -z)
     if [[ ${#files[@]} -eq 0 ]]; then
-        log "No .md files found under ${SOURCE_DIR}"
+        log "No .md files matching '${PATTERN}.md' found under ${SOURCE_DIR}"
         exit 0
     fi
 
@@ -163,6 +168,7 @@ python3 "${SCRIPT_DIR}/drive_upload.py" \
     --drive-folder-id "$DRIVE_FOLDER" \
     --client-secret "$CLIENT_SECRET" \
     --token-cache "$TOKEN_CACHE" \
+    --pattern "$PATTERN" \
     2>&1 | tee "$UPLOAD_LOG"
 UPLOAD_EXIT="${PIPESTATUS[0]}"
 set -e

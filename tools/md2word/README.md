@@ -51,7 +51,7 @@ deleted or access is revoked.
 ## Usage
 
 ```bash
-tools/md2word/convert.sh -s <source_dir> -g <drive_folder_id> [-t <target_dir>] [-n|-u]
+tools/md2word/convert.sh -s <source_dir> -g <drive_folder_id> [-t <target_dir>] [-p <pattern>] [-n|-u]
 ```
 
 | Flag | Required | Default | Meaning |
@@ -61,6 +61,7 @@ tools/md2word/convert.sh -s <source_dir> -g <drive_folder_id> [-t <target_dir>] 
 | `-t`, `--target` | no | `~/Documents/md2word` | Local directory to stage the generated `.docx` tree in (ignored with `-u`) |
 | `-c`, `--client-secret` | no | `$HOME/.config/md2word/client_secret.json` | Path to the OAuth client secret JSON (see setup above) |
 | `-k`, `--token-cache` | no | `$HOME/.config/md2word/token.json` | Path to the cached OAuth token |
+| `-p`, `--pattern` | no | `*` (everything) | Glob matched against filenames without their extension, searched recursively under `-s` |
 | `-n`, `--no-upload` | no | off | Convert to local `.docx` only; skip the Drive upload step entirely |
 | `-u`, `--upload-only` | no | off | Skip Markdown conversion; upload the existing `.docx` tree at `-s` as-is |
 | `-h`, `--help` | no | — | Show usage |
@@ -70,6 +71,16 @@ already have (from a previous run, or from anywhere else) without re-converting 
 
 ```bash
 tools/md2word/convert.sh -s ~/Documents/md2word/docs -g <drive_folder_id> -u
+```
+
+`-p/--pattern` narrows down which files get touched, without having to move anything into a
+separate directory first. **Always quote it** so your shell doesn't expand the glob itself
+before the script sees it:
+
+```bash
+# Only files starting with "CUSTOM" (matches CUSTOM_LICENSE.md, CUSTOMER_HOWTO.md, etc.)
+tools/md2word/convert.sh -s ~/dev/edge-licensing/docs -g <drive_folder_id> -p "CUSTOM*"
+tools/md2word/convert.sh -s ~/Documents/md2word/docs -g <drive_folder_id> -u -p "CUSTOM*"
 ```
 
 Both `-c`/`-k` also read from `MD2WORD_CLIENT_SECRET` / `MD2WORD_TOKEN_CACHE` env vars if the

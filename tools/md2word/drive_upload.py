@@ -208,6 +208,7 @@ def main():
     parser.add_argument("--drive-folder-id", required=True)
     parser.add_argument("--client-secret", required=True, type=Path)
     parser.add_argument("--token-cache", required=True, type=Path)
+    parser.add_argument("--pattern", default="*", help="Glob matched against filenames without extension (default: * = everything)")
     args = parser.parse_args()
 
     if not args.client_secret.exists():
@@ -218,9 +219,9 @@ def main():
         )
         sys.exit(1)
 
-    docx_files = sorted(args.local_root.rglob("*.docx"))
+    docx_files = sorted(args.local_root.rglob(f"{args.pattern}.docx"))
     if not docx_files:
-        print(f"No .docx files found under {args.local_root}", file=sys.stderr)
+        print(f"No .docx files matching '{args.pattern}.docx' found under {args.local_root}", file=sys.stderr)
         sys.exit(0)
 
     try:
