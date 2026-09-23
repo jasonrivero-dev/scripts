@@ -58,7 +58,7 @@ tools/md2word/convert.sh -s <source_dir> -g <drive_folder_id> [-t <target_dir>] 
 |---|---|---|---|
 | `-s`, `--source` | yes | — | Markdown source directory (searched recursively); with `-u`, an existing `.docx` tree instead |
 | `-g`, `--drive-folder` | yes | — | Destination Google Drive folder ID (no default — always explicit) |
-| `-t`, `--target` | no | `~/Documents/md2word` | Local directory to stage the generated `.docx` tree in (ignored with `-u`) |
+| `-t`, `--target` | no | `~/Documents/md2word/<source dir's own name>` | Output directory — used exactly as given (its basename also becomes the matching Drive subfolder name). Ignored with `-u` |
 | `-c`, `--client-secret` | no | `$HOME/.config/md2word/client_secret.json` | Path to the OAuth client secret JSON (see setup above) |
 | `-k`, `--token-cache` | no | `$HOME/.config/md2word/token.json` | Path to the cached OAuth token |
 | `-p`, `--pattern` | no | `*` (everything) | Glob matched against filenames without their extension, searched recursively under `-s` |
@@ -85,6 +85,27 @@ tools/md2word/convert.sh -s ~/Documents/md2word/docs -g <drive_folder_id> -u -p 
 
 Both `-c`/`-k` also read from `MD2WORD_CLIENT_SECRET` / `MD2WORD_TOKEN_CACHE` env vars if the
 flags aren't given.
+
+### Output folder naming (local and Drive)
+
+Every run lands in a **container folder** — its name is mirrored both locally and as a
+matching subfolder on Drive, so different conversions sharing the same `-g` destination
+never dump files flat into each other:
+
+```bash
+# Default -t: container is named after the source dir itself ("docs")
+tools/md2word/convert.sh -s ~/dev/edge-licensing/docs -g <drive_folder_id>
+#  local:  ~/Documents/md2word/docs/...
+#  Drive:  <drive_folder_id>/docs/...
+
+# Explicit -t: its own name (not the source dir's) becomes the container, both places
+tools/md2word/convert.sh -s ~/dev/edge-licensing/docs -g <drive_folder_id> -t patent
+#  local:  ./patent/...            (relative to wherever you ran the command)
+#  Drive:  <drive_folder_id>/patent/...
+```
+
+`-u/--upload-only` follows the same rule using `-s`'s own basename as the container, since
+there's no `-t` staging step in that mode.
 
 ## Re-running against the same files
 

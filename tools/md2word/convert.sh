@@ -30,6 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SOURCE_DIR=""
 TARGET_DIR="$HOME/Documents/md2word"
+TARGET_EXPLICIT=false
 DRIVE_FOLDER=""
 CLIENT_SECRET="${MD2WORD_CLIENT_SECRET:-$HOME/.config/md2word/client_secret.json}"
 TOKEN_CACHE="${MD2WORD_TOKEN_CACHE:-$HOME/.config/md2word/token.json}"
@@ -42,7 +43,11 @@ usage() {
     echo "  -s, --source          Source directory (required) - .md files to convert, or an"
     echo "                        existing .docx tree if -u/--upload-only is given"
     echo "  -g, --drive-folder    Destination Google Drive folder ID (required unless -n/--no-upload)"
-    echo "  -t, --target          Local directory to stage generated .docx files in (default: ~/Documents/md2word; ignored with -u)"
+    echo "  -t, --target          Explicit output directory - used exactly as given, both"
+    echo "                        locally and as the matching Drive subfolder name (its"
+    echo "                        basename). Default (not given): ~/Documents/md2word/<source"
+    echo "                        dir's own name>, to avoid collisions across different"
+    echo "                        sources sharing that default. Ignored with -u."
     echo "  -c, --client-secret   OAuth client secret JSON path (default: \$MD2WORD_CLIENT_SECRET or ~/.config/md2word/client_secret.json)"
     echo "  -k, --token-cache     Cached OAuth token path (default: \$MD2WORD_TOKEN_CACHE or ~/.config/md2word/token.json)"
     echo "  -p, --pattern         Glob matched against filenames (without extension), searched"
@@ -57,7 +62,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         -s|--source) SOURCE_DIR="$2"; shift 2 ;;
-        -t|--target) TARGET_DIR="$2"; shift 2 ;;
+        -t|--target) TARGET_DIR="$2"; TARGET_EXPLICIT=true; shift 2 ;;
         -g|--drive-folder) DRIVE_FOLDER="$2"; shift 2 ;;
         -c|--client-secret) CLIENT_SECRET="$2"; shift 2 ;;
         -k|--token-cache) TOKEN_CACHE="$2"; shift 2 ;;
@@ -100,13 +105,11 @@ trap 'rm -f .puppeteer.json; [[ -n "$UPLOAD_LOG" ]] && rm -f "$UPLOAD_LOG"' EXIT
 
 if [[ "$UPLOAD_ONLY" == true ]]; then
     # Nothing to convert - upload the existing .docx tree at SOURCE_DIR directly, with no
-    # extra staging step. TARGET_DIR/SOURCE_BASENAME nesting doesn't apply here since we're
-    # not writing anything locally.
+    # extra staging step. TARGET_DIR nesting doesn't apply here since we're not writing
+    # anything locally; the container name mirrored to Drive is SOURCE_DIR's own basename.
     OUTPUT_ROOT="$SOURCE_DIR"
     log "Skipping conversion (-u/--upload-only given). Uploading existing .docx tree from: ${OUTPUT_ROOT} (pattern: ${PATTERN}.docx)"
 else
-    mkdir -p "$TARGET_DIR"
-
     mapfile -d '' files < <(find "$SOURCE_DIR" -type f -name "${PATTERN}.md" -print0 | sort -z)
     if [[ ${#files[@]} -eq 0 ]]; then
         log "No .md files matching '${PATTERN}.md' found under ${SOURCE_DIR}"
@@ -122,8 +125,16 @@ else
 }
 EOF
 
-    SOURCE_BASENAME="$(basename "$SOURCE_DIR")"
-    OUTPUT_ROOT="${TARGET_DIR}/${SOURCE_BASENAME}"
+    if [[ "$TARGET_EXPLICIT" == true ]]; then
+        # An explicit -t is used exactly as given - it IS the container, no extra nesting.
+        OUTPUT_ROOT="$TARGET_DIR"
+    else
+        # Default target: nest under a folder named after the source dir itself, so
+        # different sources (or repeated runs) sharing this same default don't collide.
+        SOURCE_BASENAME="$(basename "$SOURCE_DIR")"
+        OUTPUT_ROOT="${TARGET_DIR}/${SOURCE_BASENAME}"
+    fi
+    mkdir -p "$OUTPUT_ROOT"
 
     log "Processing Markdown files from: ${SOURCE_DIR}"
     log "Saving .docx output to:        ${OUTPUT_ROOT}"
@@ -158,7 +169,12 @@ if [[ "$NO_UPLOAD" == true ]]; then
     exit 0
 fi
 
-log "Uploading to Google Drive folder ${DRIVE_FOLDER}..."
+# Mirror the same container folder on Drive that already exists locally (OUTPUT_ROOT's own
+# name), so uploads never land flat in -g's root - matches the local behavior above and
+# keeps different conversions sharing the same -g destination from mixing together.
+CONTAINER_NAME="$(basename "$OUTPUT_ROOT")"
+
+log "Uploading to Google Drive folder ${DRIVE_FOLDER} (container: ${CONTAINER_NAME})..."
 
 UPLOAD_LOG="$(mktemp)"
 
@@ -166,6 +182,7 @@ set +e
 python3 "${SCRIPT_DIR}/drive_upload.py" \
     --local-root "$OUTPUT_ROOT" \
     --drive-folder-id "$DRIVE_FOLDER" \
+    --drive-subfolder "$CONTAINER_NAME" \
     --client-secret "$CLIENT_SECRET" \
     --token-cache "$TOKEN_CACHE" \
     --pattern "$PATTERN" \

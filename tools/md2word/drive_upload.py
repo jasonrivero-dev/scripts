@@ -286,6 +286,7 @@ def main():
     )
     parser.add_argument("--local-root", required=True, type=Path)
     parser.add_argument("--drive-folder-id", required=True)
+    parser.add_argument("--drive-subfolder", required=True, help="Container folder name to find-or-create under --drive-folder-id, mirroring the local output folder")
     parser.add_argument("--client-secret", required=True, type=Path)
     parser.add_argument("--token-cache", required=True, type=Path)
     parser.add_argument("--pattern", default="*", help="Glob matched against filenames without extension (default: * = everything)")
@@ -318,11 +319,22 @@ def main():
     service = build("drive", "v3", credentials=credentials)
 
     folder_cache: dict = {}
+
+    try:
+        drive_root_id = find_or_create_folder(service, args.drive_subfolder, args.drive_folder_id, folder_cache)
+    except Exception as exc:
+        print(
+            f"FAILED startup: could not create/find the '{args.drive_subfolder}' container "
+            f"folder under the destination Drive folder ({exc}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     total = len(docx_files)
     for index, local_path in enumerate(docx_files, start=1):
         rel_path = local_path.relative_to(args.local_root)
         progress = f"[{index}/{total}]"
-        upload_file(service, credentials, local_path, rel_path, args.drive_folder_id, folder_cache, progress)
+        upload_file(service, credentials, local_path, rel_path, drive_root_id, folder_cache, progress)
 
 
 if __name__ == "__main__":
