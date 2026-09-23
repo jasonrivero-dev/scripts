@@ -289,7 +289,16 @@ def main():
     parser.add_argument("--drive-subfolder", required=True, help="Container folder name to find-or-create under --drive-folder-id, mirroring the local output folder")
     parser.add_argument("--client-secret", required=True, type=Path)
     parser.add_argument("--token-cache", required=True, type=Path)
-    parser.add_argument("--pattern", default="*", help="Glob matched against filenames without extension (default: * = everything)")
+    parser.add_argument("--pattern", default="*", help="Glob matched against filenames without extension (default: * = everything); ignored if --file-list is given")
+    parser.add_argument(
+        "--file-list",
+        type=Path,
+        default=None,
+        help="Path to a file listing exact .docx paths to upload (one per line), all under --local-root. "
+        "Used by convert.sh's convert-then-upload path so a stale .docx tree left under --local-root "
+        "from an earlier, differently-shaped run never gets swept up by a recursive glob. "
+        "Without this, files are discovered via --local-root.rglob(pattern) instead (used by -u/--upload-only).",
+    )
     args = parser.parse_args()
 
     if not args.client_secret.exists():
@@ -300,7 +309,12 @@ def main():
         )
         sys.exit(1)
 
-    docx_files = sorted(args.local_root.rglob(f"{args.pattern}.docx"))
+    if args.file_list:
+        with args.file_list.open() as f:
+            docx_files = sorted(Path(line.rstrip("\n")) for line in f if line.strip())
+    else:
+        docx_files = sorted(args.local_root.rglob(f"{args.pattern}.docx"))
+
     if not docx_files:
         print(f"No .docx files matching '{args.pattern}.docx' found under {args.local_root}", file=sys.stderr)
         sys.exit(0)

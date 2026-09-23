@@ -101,12 +101,15 @@ fi
 SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
 
 UPLOAD_LOG=""
-trap 'rm -f .puppeteer.json; [[ -n "$UPLOAD_LOG" ]] && rm -f "$UPLOAD_LOG"' EXIT
+FILE_LIST=""
+trap 'rm -f .puppeteer.json; [[ -n "$UPLOAD_LOG" ]] && rm -f "$UPLOAD_LOG"; [[ -n "$FILE_LIST" ]] && rm -f "$FILE_LIST"' EXIT
 
 if [[ "$UPLOAD_ONLY" == true ]]; then
     # Nothing to convert - upload the existing .docx tree at SOURCE_DIR directly, with no
     # extra staging step. TARGET_DIR nesting doesn't apply here since we're not writing
     # anything locally; the container name mirrored to Drive is SOURCE_DIR's own basename.
+    # Discovery is rglob-based (FILE_LIST stays empty) since the whole point of this mode is
+    # "upload whatever .docx tree already exists here" - there's no "just converted" set.
     OUTPUT_ROOT="$SOURCE_DIR"
     log "Skipping conversion (-u/--upload-only given). Uploading existing .docx tree from: ${OUTPUT_ROOT} (pattern: ${PATTERN}.docx)"
 else
@@ -139,6 +142,7 @@ EOF
     log "Processing Markdown files from: ${SOURCE_DIR}"
     log "Saving .docx output to:        ${OUTPUT_ROOT}"
 
+    docx_outputs=()
     for file in "${files[@]}"; do
         rel_path="${file#"$SOURCE_DIR"/}"
         rel_dir="$(dirname "$rel_path")"
@@ -159,9 +163,18 @@ EOF
             --filter mermaid-filter \
             --metadata title="$basename" \
             -o "$output_path"
+
+        docx_outputs+=("$output_path")
     done
 
     log "Done! All .docx files are available in: ${OUTPUT_ROOT}"
+
+    # Upload exactly what this run just converted, not "whatever .docx files happen to
+    # exist under OUTPUT_ROOT" - a stale .docx tree left over from an earlier run with a
+    # different -t/-p (e.g. a previous nested layout) must never get swept up and
+    # re-uploaded alongside this run's output just because it's sitting in the same folder.
+    FILE_LIST="$(mktemp)"
+    printf '%s\n' "${docx_outputs[@]}" > "$FILE_LIST"
 fi
 
 if [[ "$NO_UPLOAD" == true ]]; then
@@ -178,15 +191,21 @@ log "Uploading to Google Drive folder ${DRIVE_FOLDER} (container: ${CONTAINER_NA
 
 UPLOAD_LOG="$(mktemp)"
 
+DRIVE_UPLOAD_ARGS=(
+    --local-root "$OUTPUT_ROOT"
+    --drive-folder-id "$DRIVE_FOLDER"
+    --drive-subfolder "$CONTAINER_NAME"
+    --client-secret "$CLIENT_SECRET"
+    --token-cache "$TOKEN_CACHE"
+    --pattern "$PATTERN"
+)
+# Only the convert-then-upload path (not -u/--upload-only) has an exact "just converted
+# these" file list - pass it so the upload step can't sweep up stale .docx leftovers from
+# an earlier run sitting in the same local folder (see FILE_LIST comment above).
+[[ -n "$FILE_LIST" ]] && DRIVE_UPLOAD_ARGS+=(--file-list "$FILE_LIST")
+
 set +e
-python3 "${SCRIPT_DIR}/drive_upload.py" \
-    --local-root "$OUTPUT_ROOT" \
-    --drive-folder-id "$DRIVE_FOLDER" \
-    --drive-subfolder "$CONTAINER_NAME" \
-    --client-secret "$CLIENT_SECRET" \
-    --token-cache "$TOKEN_CACHE" \
-    --pattern "$PATTERN" \
-    2>&1 | tee "$UPLOAD_LOG"
+python3 "${SCRIPT_DIR}/drive_upload.py" "${DRIVE_UPLOAD_ARGS[@]}" 2>&1 | tee "$UPLOAD_LOG"
 UPLOAD_EXIT="${PIPESTATUS[0]}"
 set -e
 

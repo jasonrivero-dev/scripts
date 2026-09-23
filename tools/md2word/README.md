@@ -107,6 +107,14 @@ tools/md2word/convert.sh -s ~/dev/edge-licensing/docs -g <drive_folder_id> -t pa
 `-u/--upload-only` follows the same rule using `-s`'s own basename as the container, since
 there's no `-t` staging step in that mode.
 
+If you reuse the same local `-t`/default staging folder across runs with a **different**
+source or a different `-t` value than before, whatever was written there previously is not
+cleaned up automatically — that's intentional (this tool never deletes local files on its
+own). Converting only ever uploads exactly the files it just produced in that run, never a
+stale leftover tree sitting in the same folder from an earlier, differently-shaped run, so
+old local cruft is harmless clutter rather than something that gets re-uploaded. If you'd
+rather not have it linger on disk, delete the local folder yourself before converting again.
+
 ## Re-running against the same files
 
 Re-running against a file you've already uploaded **overwrites** the existing Google Doc's
