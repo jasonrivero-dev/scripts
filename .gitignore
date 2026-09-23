@@ -7,3 +7,4 @@ mermaid-filter.err
 .env
 __pycache__/
 *.pyc
+patent/
