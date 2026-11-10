@@ -23,6 +23,9 @@ Run layers in order. Do not advance to the next layer until the current one is g
 4. Run `/validate-review` → address all issues → confirm ✅
 5. Run `/validate-manual` → complete checklist → confirm ✅
 
+**Quick track** (`projects/<feature>/QUICK.md`, no TRD): run only Layers 1, 2 and 4. In the summary,
+show Layers 3 and 5 as `— skipped (Quick track)`.
+
 ## Final Summary
 
 After all layers pass, output:
@@ -36,5 +39,5 @@ Layer 3 — Integration / E2E    ✅  X scenarios passing
 Layer 4 — Code review          ✅  Reviewed, issues resolved
 Layer 5 — Manual testing       ✅  All scenarios passed
 ─────────────────────────────────────────────────────────
-Feature is validated. Ready for PR.
+Feature is validated. Ready for PR. Run `/pr`.
 ```

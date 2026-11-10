@@ -5,10 +5,13 @@ You drive this review. The agent surfaces issues — you decide what to fix.
 ## Steps
 
 1. Read `projects/<feature>/TRD.md` to understand the intended design.
+   On the Quick track (`QUICK.md`, no TRD), read QUICK.md instead, wherever this file says TRD;
+   "files outside the plan" compares with its `## Files`.
 
-2. Get the diff:
+2. Resolve the base branch: `base_branch` in `.ai-template/config`; if empty, `origin/HEAD`;
+   otherwise whichever of `main` / `master` exists. Then get the diff:
    ```bash
-   git diff main..HEAD          # everything since branching from main
+   git diff <base>...HEAD       # everything since branching from the base
    git diff HEAD~1 HEAD         # just the last commit
    ```
 
@@ -48,6 +51,18 @@ You drive this review. The agent surfaces issues — you decide what to fix.
    - [ ] No magic numbers or hardcoded strings that should be constants or config.
    - [ ] Function names and variable names make the code self-documenting.
    - [ ] No unnecessary comments explaining WHAT — code should be clear enough.
+
+   **Diff Discipline** (noise makes PRs larger and harder to review)
+   - [ ] No formatting-only changes. Compare per-file counts:
+         ```bash
+         git diff --numstat <base>...HEAD
+         git diff -w --ignore-blank-lines --numstat <base>...HEAD
+         ```
+         Flag files that disappear from the second list (formatting-only) or whose change count
+         drops by more than half when whitespace is ignored.
+   - [ ] No files outside the plan: flag changed files not listed in any TRD step's **Files**.
+   - [ ] No comments that restate the line below them.
+   - [ ] No drive-by refactors or renames unrelated to a TRD step.
 
 4. Output a review report, grouped by severity:
 

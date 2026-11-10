@@ -12,6 +12,9 @@ Load context for the current work session. Run this at the start of every sessio
    - `projects/<feature>/PRD.md` — understand the product requirements
    - `projects/<feature>/TRD.md` — understand the technical plan
 
+   The spec file sets the track: `PRD.md` → Standard, `QUICK.md` → Quick, `SPIKE.md` → Spike.
+   On Quick or Spike, read that file instead of the PRD and TRD.
+
 4. Run `git log --oneline -20` and read the last 20 commits to understand recent progress.
 
 5. Determine the current phase:
@@ -21,12 +24,18 @@ Load context for the current work session. Run this at the start of every sessio
    - TRD reviewed, work in progress → ready for `/implement`
    - Implementation done → ready for `/validate`
 
+   Quick: `git log --oneline -- projects/<feature>/QUICK.md` empty → `/implement`; otherwise
+   `/validate`, then `/pr`.
+   Spike: Result empty → `/spike` (continue or end); Recommendation `Promote` →
+   `/prd-init --from-spike <branch>`; `Drop` → nothing left to do.
+
 6. Output a concise session brief — no more than 10 lines:
 
 ```
 Session Brief
 ─────────────────────────────────────────
 Feature:        <name>
+Track:          Standard | Quick | Spike
 PRD status:     Draft | Reviewed | Approved
 TRD status:     Not created | Draft | Reviewed | Approved
 Last commit:    <hash> <message>
@@ -34,6 +43,9 @@ Current phase:  <Plan | Implement | Validate>
 Next action:    /<command> — <one sentence why>
 ─────────────────────────────────────────
 ```
+
+On Quick or Spike, replace the PRD and TRD status lines with one line:
+`Spec: QUICK.md <Status>` or `Spec: SPIKE.md <Hypothesis only | Result: Promote/Drop>`.
 
 7. Check for drift between `projects/` and `CLAUDE.md ## Project State`:
    - Count subdirectories in `projects/`.

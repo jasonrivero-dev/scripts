@@ -95,6 +95,14 @@ Client → [Component A] → [Component B] → [Data Store]
 - [ ] Smoke test
 - [ ] Rollback plan: [what to run if this needs to be reverted]
 
+## Clarifications
+
+> Answers to UNBACKED assumptions raised during /implement. Each row backs later steps and
+> sessions as `TRD: Clarifications #<n>`. Never record secret values here.
+
+| # | Step | Question | Answer | Source | Date |
+|---|------|----------|--------|--------|------|
+
 ## Traceability Matrix
 
 > Every PRD requirement must appear here. Every TRD step must trace back to a requirement.

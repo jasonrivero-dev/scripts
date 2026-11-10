@@ -1,0 +1,2 @@
+*.sh text eol=lf
+.ai-template/config text eol=lf

@@ -3,6 +3,8 @@
 **Status:** Draft | In Review | Approved
 **Author:** [Name]
 **Date:** [YYYY-MM-DD]
+**Tickets:** [Zero, one, or several ticket IDs, comma-separated — used for branch naming]
+**Track:** Standard
 **Related TRD:** [TRD.md](TRD.md) | Not yet created
 
 ---

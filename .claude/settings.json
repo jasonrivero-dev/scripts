@@ -1,0 +1,60 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git show)",
+      "Bash(git show *)",
+      "Bash(git add *)",
+      "Bash(git rev-parse *)",
+      "Bash(git symbolic-ref *)",
+      "Bash(git merge-base *)",
+      "Bash(git cat-file *)",
+      "Bash(git show-ref *)",
+      "Bash(git branch --show-current)",
+      "Bash(git branch --merged *)",
+      "Bash(git remote get-url *)",
+      "Bash(git switch *)",
+      "Bash(git checkout *)",
+      "Bash(bash .claude/scripts/branch-name.sh *)",
+      "Bash(rm -f .ai-template/grants.local)",
+      "PowerShell(Remove-Item .ai-template/grants.local -ErrorAction SilentlyContinue)",
+      "PowerShell(git status)",
+      "PowerShell(git status *)",
+      "PowerShell(git diff)",
+      "PowerShell(git diff *)",
+      "PowerShell(git log)",
+      "PowerShell(git log *)",
+      "PowerShell(git show)",
+      "PowerShell(git show *)",
+      "PowerShell(git add *)",
+      "PowerShell(git rev-parse *)",
+      "PowerShell(git symbolic-ref *)",
+      "PowerShell(git merge-base *)",
+      "PowerShell(git cat-file *)",
+      "PowerShell(git show-ref *)",
+      "PowerShell(git branch --show-current)",
+      "PowerShell(git branch --merged *)",
+      "PowerShell(git remote get-url *)",
+      "PowerShell(git switch *)",
+      "PowerShell(git checkout *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -c 'alias.git-guard=!bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/git-guard.sh\"' git-guard"
+          }
+        ]
+      }
+    ]
+  }
+}

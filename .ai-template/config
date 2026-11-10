@@ -1,0 +1,18 @@
+# git-safety settings. key=value, no quotes. Lines starting with # are ignored.
+
+# Branches the agent may never commit to or push to. main and master are ALWAYS protected,
+# even if removed from this list. Add others comma-separated, e.g. main,master,develop
+protected_branches=main,master
+
+# Base branch for new branches, diffs and PRs. Empty = auto-detect (origin/HEAD, then main, then master).
+base_branch=
+
+# Branch name pattern. Tokens: {type} {ticket} {slug} {author}
+# An empty token is removed along with one adjacent separator (- or /).
+branch_template={type}/{ticket}-{slug}
+
+# Changed-line budget per PR (additions + deletions vs. base). Over budget = warning + split suggestion.
+pr_size_budget=400
+
+# Template repository that /prd-init checks for newer versions (tags v<X.Y.Z>).
+template_repo=git@github.com:Novarc-Software/ai-agent-template.git

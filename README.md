@@ -1,6 +1,6 @@
 # Development and Operations Scripts
 
-A collection of local development, build, test, telemetry, licensing, and diagnostic helpers used alongside the Novarc/Celeste software stack.
+A collection of local development, build, test, telemetry, licensing, and diagnostic helpers used alongside the Novarc/Celeste and Luna software stacks.
 
 This repository is **not a standalone application**. Most commands assume a Linux development machine, a Celeste checkout at `~/dev/celeste`, and other Novarc services or tools installed in their normal system locations. Read each script's help output before using it.
 
@@ -10,9 +10,10 @@ The repo is organized by topic:
 | --- | --- |
 | [`celeste/`](celeste/) | Celeste host build, launch, setup, logging, coverage, metrics/PLC helpers, FFmpeg crash repro |
 | [`licensing/`](licensing/) | `novarc-licensing` CLI wrapper, EC2 QA deploy/uninstall, Keygen checkout test, TPM hardware ID |
+| [`luna/`](luna/) | Native (no Docker) build/run tooling for the separate `~/dev/luna` checkout — Go backend, Flutter Linux frontend, `.deb` packaging |
 | [`telemetry/`](telemetry/) | Vector/Prometheus/Grafana stack control, test environment loader, mocks, configure templates |
 | [`tools/`](tools/) | Diverse one-off utilities: Jira CLI wrappers, Markdown-to-HTML converter, Markdown-to-Google-Docs converter |
-| [`lib/`](lib/) | Shared logging helpers sourced by scripts in `celeste/` and `telemetry/` |
+| [`lib/`](lib/) | Shared logging helpers sourced by scripts in `celeste/`, `telemetry/`, and `luna/` |
 | [`docs/`](docs/) | Personal VS Code how-to and IDE troubleshooting notes |
 | [`gen-coverage.sh`](gen-coverage.sh) | The one script that stays at repo root — see [Coverage](#coverage) below |
 
@@ -54,6 +55,7 @@ Several scripts change system state, require `sudo`, contact external services, 
 - `licensing/keygen/test_keygen.sh` reads local Keygen credentials from files under `~/dev` and sends a request to Keygen.
 - `licensing/licadmin` generates signing material and can install licenses into a running system daemon.
 - `licensing/licadmin-ec2-deploy --uninstall` purges the `novarc-licensing` package and deletes the deploy directory on the configured EC2 box after a confirmation prompt.
+- `luna/run-luna.sh config` writes `/opt/novarc/apps/luna/etc/config.toml` with `sudo` (one-time per checkout). `frontend-toolchain` fetches the Flutter SDK from a private S3 bucket (`novarc-build-deps`) and installs apt packages with `sudo` if missing.
 - `tools/md2word/convert.sh` uploads to Google Drive using an OAuth client secret and cached token, both defaulting to `$HOME/.config/md2word/` — entirely outside this repository. Never commit either; if you ever point `MD2WORD_CLIENT_SECRET`/`MD2WORD_TOKEN_CACHE` at a path inside the repo, gitignore it first.
 - `telemetry/sync_telemetry.sh reset` deletes Vector state and logs under `/var/lib/vector` and `/var/log/vector`.
 - The telemetry mock scripts append data directly to production-style log paths. Use them only on an intended test host.
@@ -70,6 +72,7 @@ Install only the dependencies needed for the workflow you are using. Common requ
 - Markdown conversion: Pandoc, Node.js/npm, `mermaid-filter`, Chromium-compatible browser tooling, and `xdg-open` when using browser output.
 - Markdown to Google Docs: the above, plus Python 3 and `pip install -r tools/md2word/requirements.txt`, plus a one-time Google Cloud OAuth setup (see `tools/md2word/README.md`).
 - Licensing: Rust/Cargo, the separate `~/dev/Licensing` and `~/dev/licensing-poc` checkouts, and optionally the installed `lictl` command.
+- Luna: a sibling checkout at `~/dev/luna` (Go backend, Flutter frontend), `go`, `dart`/`protoc_plugin`, AWS credentials with access to the `novarc-build-deps` S3 bucket (first `frontend-toolchain` run only, cached under `luna/.cache/` after), and the apt packages `run-luna.sh frontend-toolchain` installs for Flutter Linux. See [`luna/README.md`](luna/README.md).
 - Telemetry: Docker, Vector `0.56.0`, AWS credentials, and the target Novarc service configuration. `sudo ./telemetry/install_metrics_deps.sh` installs or verifies several host dependencies.
 - Jira: the Jira CLI (`jira`) and a valid API token in the location expected by the Jira scripts.
 - Crash reproduction: a configured Celeste host build and an NVIDIA GPU with NVENC; `ffprobe` is used to validate the resulting MP4.
@@ -192,6 +195,9 @@ Reports are written below the Celeste checkout, normally under `reports/host_cov
 # Follow the newest log; optionally filter case-insensitively
 ./celeste/tail-log.sh
 ./celeste/tail-log.sh licensing
+
+# Production log location (/var/log/novarc/celeste) instead of the dev default
+./celeste/tail-log.sh -p licensing
 ```
 
 ### FFmpeg crash resilience
@@ -227,9 +233,10 @@ Builds the `novarc-licensing` .deb and example clients from `~/dev/licensing-poc
 ```bash
 ./licensing/licadmin-ec2-deploy
 ./licensing/licadmin-ec2-deploy --uninstall
+./licensing/licadmin-ec2-deploy -u <user> -s <host> -k <keyfile>   # target a different box
 ```
 
-`--uninstall` purges the package and deletes the remote deploy directory after a y/N confirmation prompt.
+`--uninstall` purges the package and deletes the remote deploy directory after a y/N confirmation prompt. `-u`/`-s`/`-k` override the remote SSH user, host, and identity file (defaults: `ubuntu`, the QA EC2 box's IP, and the standard key pair) — pass all three together when deploying to or uninstalling from a different box; there's no password-auth fallback if `-k`'s file doesn't exist.
 
 ### Keygen checkout test
 
@@ -242,6 +249,26 @@ Builds the `novarc-licensing` .deb and example clients from `~/dev/licensing-poc
 ```
 
 Derives an ID from a TPM 2.0 endorsement key and falls back to a stable OS/CPU-derived hash when TPM tooling or hardware is unavailable. It underlies the hardware-ID fingerprinting that `licadmin hwid` also produces.
+
+## luna/
+
+Native (no Docker) build/run tooling for the separate `~/dev/luna` checkout (Go backend +
+Flutter Linux frontend) — `build_docker.sh` can't authenticate its S3 pulls on this machine,
+hence a host-side path instead. Full detail, including the NovEye Autonomy licensing manual
+QA steps, lives in [`luna/README.md`](luna/README.md); summary here:
+
+```bash
+# Backend, in one terminal
+./luna/run-luna.sh backend
+
+# Frontend, in another
+./luna/run-luna.sh frontend
+
+# Package a .deb for the testbench
+./luna/run-luna.sh bundle
+```
+
+[`luna/build-backend.sh`](luna/build-backend.sh) is the Go-only side (deps/toolchain/generate/build/test), independent of the Flutter frontend. `sudo` steps (`config`, and `frontend-toolchain` if apt packages are missing) need a real terminal and aren't run by an agent.
 
 ## telemetry/
 
@@ -338,13 +365,14 @@ tools/md2word/convert.sh -s /path/to/markdown -g <drive_folder_id>
 tools/md2word/convert.sh -s /path/to/markdown -n                  # local .docx only, no Drive upload
 tools/md2word/convert.sh -s /path/to/existing/docx -g <id> -u     # upload an existing .docx tree as-is, no conversion
 tools/md2word/convert.sh -s /path/to/markdown -g <id> -p "CUSTOM*" # only filenames matching the pattern
+tools/md2word/convert.sh -s /path/to/markdown -g <id> -t patent   # explicit container name (local + Drive subfolder)
 ```
 
-Requires a one-time Google Cloud OAuth setup — see [`tools/md2word/README.md`](tools/md2word/README.md). Re-running against an already-uploaded file overwrites the existing Google Doc in place rather than creating a duplicate.
+Requires a one-time Google Cloud OAuth setup — see [`tools/md2word/README.md`](tools/md2word/README.md). Every run lands in a container folder mirrored both locally and as a matching Drive subfolder: by default that's named after the source directory itself (`~/Documents/md2word/<source-name>/`); an explicit `-t <name>` becomes the container name directly instead, both places. Re-running against an already-uploaded file overwrites the existing Google Doc in place rather than creating a duplicate (and best-effort reposts its comments, since Drive wipes them on overwrite — see `tools/md2word/README.md` for the real limits of that).
 
 ## lib/
 
-[`lib/dev-log-lib`](lib/dev-log-lib) is the shared NOVARC-banner logging helper library. It's sourced by `celeste/dev-build.sh`, `celeste/celeste-setup.sh`, and `telemetry/vector-test.sh` — anything that wants the same colored/bannered log output. It's a plain library file, not something you run directly.
+[`lib/dev-log-lib`](lib/dev-log-lib) is the shared NOVARC-banner logging helper library. It's sourced by `celeste/dev-build.sh`, `celeste/celeste-setup.sh`, `telemetry/vector-test.sh`, and `luna/run-luna.sh`/`luna/build-backend.sh` — anything that wants the same colored/bannered log output. It's a plain library file, not something you run directly.
 
 ## docs/
 

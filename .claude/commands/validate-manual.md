@@ -45,4 +45,4 @@ You test this. The agent generates the checklist from the PRD.
    - Re-test the failing scenario manually.
 
 5. When all scenarios are ✅:
-   Output: "Layer 5 ✅ — All manual scenarios passed. Feature is validated. Ready for PR."
+   Output: "Layer 5 ✅ — All manual scenarios passed. Feature is validated. Ready for PR. Run `/pr`."

@@ -1,3 +1,4 @@
+<!-- ai-template:begin -->
 # Project Rules
 
 ## Methodology: Plan → Implement → Validate (PIV)
@@ -19,7 +20,8 @@ Never skip phases. Never assume. Always review before advancing.
 2. **Review PRD before TRD.** Use `/prd-review`. No TRD without a signed-off PRD.
 3. **Review plan before executing.** Use `/trd-review`. No code without a confirmed TRD.
 4. **Reset context between phases.** Use `/prime` to load only what's needed per phase.
-5. **Commit frequently.** Every logical unit of work gets a commit. Git log is your memory.
+5. **Agent proposes commits; human approves.** Every logical unit of work gets a commit, staged and
+   proposed by the agent and approved by a human. Never commit to protected branches. Git log is your memory.
 
 ## Commit Convention
 
@@ -30,6 +32,29 @@ Types: feat | fix | refactor | test | docs | chore
 ```
 
 Example: `feat(todos): add repository layer with create and findByUserId`
+
+## Git Safety
+
+Enforced by the `git-guard` hook (`.claude/hooks/git-guard.sh`, registered in `.claude/settings.json`).
+The hook must be present. Do not remove or bypass it.
+
+- **Blocked:** `commit` on a protected branch, and `push` to one. Protected = `main`, `master`, plus
+  `protected_branches` in `.ai-template/config`.
+- **Asks for approval:** every other command that changes commits, refs, or remotes, or discards
+  working-tree changes (push, fetch, pull, reset, restore, rebase, merge, branch -d, tag, …).
+- **No prompt:** read-only git (`status`, `diff`, `log`, `show`), `git add`, and plain branch switches.
+- **Guardrail files ask too:** any change to `.claude/hooks/`, `.claude/scripts/`, `.claude/settings*.json`,
+  or `.ai-template/`, and git aliases resolve to what they run. This guards against accidental
+  self-escalation. It is not a boundary against deliberate obfuscation, so never try to work around it.
+- **Before any approval-gated git command**, show the exact command and the full commit message
+  or PR text in chat first.
+- **Feature-scoped grants:** if the user asks to stop being prompted for an action (e.g. commits)
+  during the current feature, offer to write `.ai-template/grants.local`
+  (`feature=<name>`, `granted_at=<UTC time>`, `allow=commit,push`). Writing it prompts the user.
+  `/prd-init` removes it when a new PRD starts. Grants never lift a block.
+- **Docs-first PRs:** PRD + TRD go in a docs-only PR (`/pr` after `/trd-review`). After it merges,
+  `/implement` branches `feat/…` or `fix/…` from the updated base.
+- Config (`.ai-template/config`): `protected_branches`, `base_branch`, `branch_template`, `pr_size_budget`.
 
 ## Project Structure
 
@@ -85,6 +110,8 @@ These are enforced at three points in the PIV workflow:
 Sub-agents are for research only — codebase exploration, reading docs, scanning files.
 Never use sub-agents to write production code.
 
+<!-- ai-template:end -->
+
 ## System Evolution
 
 Every mistake the agent makes is an opportunity to add a rule here so it never makes
@@ -100,20 +127,22 @@ that mistake again. This file compounds over time.
 
 **What this app does:** A personal collection of Bash (and one Python) scripts for local
 development, build/test, telemetry, licensing QA, and diagnostics work alongside the
-Novarc/Celeste software stack. Not a standalone application — each script is an independent
-operational tool, run manually from the command line.
+Novarc/Celeste and Luna software stacks. Not a standalone application — each script is an
+independent operational tool, run manually from the command line.
 
 **Domain / users:** Internal tooling for a single developer working on Novarc's Celeste
-product and the novarc-licensing product; used on a personal dev machine and to
-build/deploy/QA an EC2 licensing box.
+product, the Luna product, and the novarc-licensing product; used on a personal dev machine
+and to build/deploy/QA an EC2 licensing box.
 
 **Main components:**
 
 - `celeste/` — build/launch/log tooling for Celeste (incl. `ffmpeg-crash/` crash repro)
 - `licensing/` — `novarc-licensing` CLI wrapper, EC2 deploy/uninstall, hardware-ID/Keygen/TPM
+- `luna/` — build and run scripts for native Luna execution (backend, frontend, bundling)
 - `telemetry/` — Vector/Prometheus/Grafana stack control, mocks, configure templates
-- `tools/` — Jira CLI wrappers, Markdown-to-HTML converter
-- `lib/` — shared logging helper sourced by `celeste/` and `telemetry/` scripts
+- `tools/` — Jira and GitHub PR CLI wrappers, Markdown-to-HTML converter, Markdown-to-Word
+  (local `.docx` + Google Drive upload, native Google Docs conversion)
+- `lib/` — shared logging helper sourced by `celeste/`, `telemetry/`, and `luna/` scripts
 - `docs/` — personal VS Code how-to and IDE troubleshooting notes
 
 ---
