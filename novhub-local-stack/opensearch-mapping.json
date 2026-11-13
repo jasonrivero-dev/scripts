@@ -1,0 +1,44 @@
+{
+  "mappings": {
+    "dynamic": true,
+    "properties": {
+      "@timestamp": { "type": "date" },
+      "run_id": { "type": "long" },
+      "robot": { "properties": { "robot_id": { "type": "long" } } },
+      "weld_session": {
+        "properties": {
+          "job_id": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+          "part_id": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+          "serial_id": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+          "weld_id": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+          "work_order_ref": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+          "spool_ref": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+          "welder_id_ref": { "type": "text", "fields": { "keyword": { "type": "keyword" } } }
+        }
+      },
+      "weld_summary": {
+        "type": "object",
+        "dynamic": true,
+        "properties": {
+          "arc_on_utc": { "type": "date" },
+          "arc_off_utc": { "type": "date" }
+        }
+      },
+      "arc_time": { "type": "float" },
+      "live_voltage": { "type": "float" },
+      "live_amps": { "type": "float" },
+      "live_wfs": { "type": "float" },
+      "live_travel_speed": { "type": "float" },
+      "live_weave_frequency": { "type": "float" },
+      "live_weave_amplitude": { "type": "float" },
+      "autonomy_root_opening_mm": { "type": "float" },
+      "files": {
+        "properties": {
+          "path": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+          "category": { "type": "keyword" }
+        }
+      },
+      "event": { "type": "keyword" }
+    }
+  }
+}
