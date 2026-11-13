@@ -192,7 +192,10 @@ in that file (confirmed present: `AWS_IAM_KEY`, `SWR_API_KEY`, `SWR_DB_KEY`, `PG
   `read_identity`, environment construction (`SWR_NUMBER`/`SWR_ID`/etc., plus
   `SWR_REPL_FILE_SRC_PATH` pointed at `novhub-local-stack/.state/novdata-logs/`, created by this
   step, replacing the runbook's `~/novdata-dev`), the **`novdata` role password** (the second,
-  distinct secret) read via `prompt_secret` only when the roles check fails, background start of
+  distinct secret, exported as `SWR_DB_KEY`) read via `prompt_secret` every time this step runs —
+  gated only by `prompt_secret`'s own built-in skip-when-already-set behavior, not by the roles
+  check, since NovData requires `SWR_DB_KEY` in its own process environment on every start
+  regardless of whether the roles already exist (Clarifications #4) — background start of
   `dotnet run --project NovData` (pidfile), verify via `listening 8000` + the `robot` row query.
 - **Verify:** run against the real `~/dev/NovData` checkout; verify query asserts `robot`,
   `weld_run`, and `weld_run_end` are present and enabled, plus a total-row-count canary of 10
@@ -361,6 +364,7 @@ the real machine and real sibling repos, per this repo's established verificatio
 | 1 | Step 4 (NOVAPI) | Does `db_cloud_dev` set a `POSTGRES_PASSWORD`, and how? | Fixed literal `postgres` in `docker-compose.yml`, same across all 4 DB services, no volumes declared, not trust auth. NovApi's own `.env` needs matching `DB_USERNAME`/`DB_PASSWORD` written in. | NOVAPI peer session | 2026-11-12 |
 | 2 | Step 3 (NovData) | How many `replication_config` rows after a fresh, fully-migrated start — 6 or 7? | Neither — 10 (corrected from an initial "9", an arithmetic slip: 6+1+3=10). Original 6 (robot/migration/weld_run/weld_data/replication_config/replication_history) + `weld_run_end`(250) + `stop_sources`/`stop_device_types`/`stop_reasons`(850/860/870). No migration deletes a row. Matches runbook rev 0.6. | NovData peer session | 2026-11-12 |
 | 3 | Step 7 (plc-node) | Does the installed config already point at the simulator? What's the real build output path? | No — shipped template has the real PLC address active; needs an edit every time, nothing rewrites it post-install. Output: `package/plc_node-ubuntu_22.04-x64-<ver>.deb` (git-ignored, created by `./build_docker.sh package`; `<ver>` = CMake project version + build number, e.g. `1.0.2.dev`). | PLCNODE peer session | 2026-11-12 |
+| 4 | Step 3 (NovData) | Does NovData need `SWR_DB_KEY` on every start, or only during first-time role setup? | Every start — `Logger.cs` builds its connection string from `SWR_DB_KEY` fresh at construction on every process launch (`DbUtils.cs:22`, no default, throws if unset); the `novdata`/`noveye` roles already existing in Postgres is irrelevant. The prompt must be gated on `prompt_secret`'s own skip-when-already-set behavior (matching the runbook), never on the roles-exists check — the original TRD text was wrong and has been corrected above. | NovData peer session | 2026-11-13 |
 
 ## Traceability Matrix
 
