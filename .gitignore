@@ -9,4 +9,6 @@ __pycache__/
 *.pyc
 patent/
 luna/.cache/
+novhub-local-stack/.state/
+novhub-local-stack/.venv/
 .ai-template/*.local

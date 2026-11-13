@@ -161,7 +161,7 @@ in that file (confirmed present: `AWS_IAM_KEY`, `SWR_API_KEY`, `SWR_DB_KEY`, `PG
 
 - **Files:** `steps/prereqs.sh`
 - **What:** `prereqs_check` only (no `_up`/`_down` — nothing to start or stop). Tool-presence
-  check (`docker`, `node`, `npm`, `go`, `pwsh`, `gh`, `dotnet`; `docker compose version`),
+  check (`docker`, `node`, `npm`, `dotnet`, `git-lfs`, `python3`, `gh`; `docker compose version`),
   reporting any missing tool and stopping (`manual`, exit 2). OpenSearch's `vm.max_map_count`
   check (PRD AC3's named example): if `sysctl -n vm.max_map_count` is below `262144`, print the
   exact `sudo sysctl -w vm.max_map_count=262144` command and stop (`manual`); otherwise `already
