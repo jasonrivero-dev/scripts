@@ -125,8 +125,16 @@ SQL
 
   wait_for_port novapi "$NOVAPI_PORT" || return 1
 
-  local ping
-  ping="$(curl -s "http://127.0.0.1:${NOVAPI_PORT}/api/v1/auth/ping")"
+  # The port binds before Express finishes registering routes/policies - retry briefly
+  # rather than failing on the first response, which can arrive empty during that window.
+  local ping tries=0
+  until [ "$tries" -ge 20 ]; do
+    ping="$(curl -s "http://127.0.0.1:${NOVAPI_PORT}/api/v1/auth/ping")"
+    [ "$ping" = '{"status":"/pong"}' ] && break
+    is_running novapi || { error "FAILED: novapi exited while waiting for a valid ping response"; return 1; }
+    tries=$((tries + 1))
+    sleep 1
+  done
   if [ "$ping" != '{"status":"/pong"}' ]; then
     error "FAILED: NOVAPI listening but ping returned: $ping"
     return 1
