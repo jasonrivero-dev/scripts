@@ -63,12 +63,12 @@ novdata_up() {
 
   read_identity
   mkdir -p "$NOVDATA_LOG_DIR"
-  prompt_secret SWR_DB_KEY "novdata role password (see $NOVDATA_REPO/res/initial-roles.sql)"
+  read_novdata_db_key
   export SWR_REPL_FILE_SRC_PATH="$NOVDATA_LOG_DIR"
 
   start_background novdata bash -c "cd \"$NOVDATA_REPO\" && exec dotnet run --project NovData"
 
-  until listening "$NOVDATA_UDP_PORT"; do sleep 1; done
+  wait_for_port novdata "$NOVDATA_UDP_PORT" || return 1
   log "ok: UDP $NOVDATA_UDP_PORT listening"
 
   _novdata_verify

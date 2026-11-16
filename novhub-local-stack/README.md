@@ -35,6 +35,10 @@ part of `up` — run it after each simulated weld to see it reflected in NovApp.
 - `vm.max_map_count >= 262144` (OpenSearch's own requirement) — prints the exact `sudo sysctl`
   command if it's lower
 
+NovData, NOVAPI, and NovApp running together can exceed a typical shell's default open-file
+limit (often 1024, via their `nodemon`/`vite` file watchers). `run-novhub.sh` raises its own
+session's limit to 4096 at startup (no `sudo` needed) — no action required.
+
 ## The four secrets
 
 Each is prompted once, only for the step that still needs it, read with no echo, and never

@@ -27,6 +27,18 @@ is_running() {
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+wait_for_port() {
+  local name="$1" port="$2"
+  until listening "$port"; do
+    if ! is_running "$name"; then
+      error "FAILED: $name exited before listening on port $port - see $STATE_DIR/$name.log"
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
 start_background() {
   local name="$1"
   shift
@@ -55,6 +67,23 @@ stop_background() {
   log "Stopping $name (pid $pid)"
   kill -- "-${pgid:-$pid}" 2>/dev/null || kill "$pid" 2>/dev/null
   rm -f "$pidfile"
+}
+
+read_novdata_db_key() {
+  if [ -n "${SWR_DB_KEY:-}" ]; then
+    return 0
+  fi
+  local file="$NOVDATA_REPO/res/initial-roles.sql"
+  if [ ! -f "$file" ]; then
+    error "NovData's initial-roles.sql not found: $file"
+    exit 1
+  fi
+  SWR_DB_KEY="$(grep -E "CREATE USER novdata WITH PASSWORD" "$file" | sed -E "s/.*PASSWORD '([^']*)'.*/\1/")"
+  if [ -z "$SWR_DB_KEY" ]; then
+    error "Could not read the novdata role password from $file"
+    exit 1
+  fi
+  export SWR_DB_KEY
 }
 
 prompt_secret() {

@@ -15,7 +15,7 @@ sync_up() {
   "$SYNC_VENV_DIR/bin/pip" install -q -r "$SYNC_REQUIREMENTS"
   log "ok: dependencies installed"
 
-  prompt_secret SWR_DB_KEY "novdata role password (see $NOVDATA_REPO/res/initial-roles.sql)"
+  read_novdata_db_key
 
   NOVDATA_HOST=127.0.0.1 NOVDATA_PORT="$NOVDATA_PG_PORT" NOVDATA_DB=swrdb NOVDATA_USER=novdata \
     SWR_DB_KEY="$SWR_DB_KEY" \
