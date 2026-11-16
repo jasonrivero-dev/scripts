@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  cat <<USAGE
+Usage: setup-host.sh
+
+One-time host setup for the three sysctl kernel limits run-novhub.sh needs
+(vm.max_map_count, fs.inotify.max_user_watches, fs.inotify.max_user_instances).
+Persists them via /etc/sysctl.d/99-novhub-local-stack.conf (survives reboot)
+and applies immediately. Run with no sudo prefix - it calls sudo internally,
+only if something actually needs changing.
+USAGE
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/steps/prereqs.sh"

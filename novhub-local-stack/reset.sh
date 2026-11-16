@@ -6,13 +6,18 @@ source "$RESET_SCRIPT_DIR/lib/common.sh"
 source "$NOVHUB_ROOT/steps/novapi.sh"
 source "$NOVHUB_ROOT/steps/novdata.sh"
 source "$NOVHUB_ROOT/steps/opensearch.sh"
+source "$NOVHUB_ROOT/steps/plcsim.sh"
+source "$NOVHUB_ROOT/steps/plcnode.sh"
 
 usage() {
   cat <<USAGE
-Usage: reset.sh [--novapi-db] [--novdata-db] [--opensearch] [--state] [--all]
+Usage: reset.sh [--novapi-db] [--novdata-db] [--opensearch] [--state] [--plc-stop] [--all]
 
 Selectively wipe containers/data novhub-local-stack touches, for a clean slate before
 repeated local testing. No flags: print this usage and do nothing.
+
+--plc-stop stops PLCSIM and plc-node only, without touching the rest of the stack
+(run-novhub.sh down stops everything; this is for when you only want these two).
 USAGE
 }
 
@@ -58,6 +63,11 @@ reset_state() {
   fi
 }
 
+reset_plc_stop() {
+  plcsim_down
+  plcnode_down
+}
+
 if [ "$#" -eq 0 ]; then
   usage
   exit 0
@@ -69,6 +79,7 @@ for arg in "$@"; do
     --novdata-db) reset_novdata_db ;;
     --opensearch) reset_opensearch ;;
     --state) reset_state ;;
+    --plc-stop) reset_plc_stop ;;
     --all)
       reset_novapi_db
       reset_novdata_db

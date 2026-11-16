@@ -19,6 +19,22 @@ source "$SCRIPT_DIR/steps/sync.sh"
 
 ORDERED_STEPS=(opensearch novdata novapi novapp plcsim plcnode luna)
 
+usage() {
+  cat <<USAGE
+Usage: run-novhub.sh [up|status|down|sync]
+
+  up      bring every automatable component up, in order (stops at the first
+          failure or manual-action step; PLCSIM/plc-node build+install+start
+          for real here, prompting for sudo directly when needed)
+  status  report every component's current state, change nothing (default)
+  down    stop everything this script started; containers stopped not removed
+  sync    load the latest weld into OpenSearch, then run NovSync (standalone)
+
+LUNA's backend/frontend always print manual instructions - this script never
+starts them (the frontend needs the real desktop display).
+USAGE
+}
+
 cmd_up() {
   prereqs_check || return $?
   local name rc
@@ -57,8 +73,10 @@ case "$cmd" in
   status) cmd_status ;;
   down) cmd_down ;;
   sync) sync_up ;;
+  -h|--help) usage ;;
   *)
     error "Unknown command: $cmd (expected: up|status|down|sync)"
+    usage
     exit 1
     ;;
 esac

@@ -275,20 +275,21 @@ QA steps, lives in [`luna/README.md`](luna/README.md); summary here:
 
 Brings up the full local NovHub stack for manual validation — the weld-data path (PLCSIM →
 NovData → an OpenSearch loader → NOVAPI → NovApp) and the control path (LUNA → `plc-node` →
-PLCSIM) — idempotently, stopping at the first step that needs a `sudo` command, a build, or a
-manual terminal. Full detail (secrets, prerequisites, what `down` does and doesn't do) lives in
+PLCSIM) — idempotently. Full detail (secrets, prerequisites, the scripts table) lives in
 [`novhub-local-stack/README.md`](novhub-local-stack/README.md); summary here:
 
 ```bash
-./novhub-local-stack/run-novhub.sh up      # bring the automatable parts up, in order
+./novhub-local-stack/setup-host.sh         # one-time: persist the kernel limits the stack needs
+./novhub-local-stack/run-novhub.sh up      # bring everything up, in order (prompts for sudo as needed)
 ./novhub-local-stack/run-novhub.sh status  # report every component's state, change nothing
 ./novhub-local-stack/run-novhub.sh down    # stop everything this script started; keeps data
 ./novhub-local-stack/run-novhub.sh sync    # load the latest weld into OpenSearch, then NovSync
 ./novhub-local-stack/reset.sh --all        # dev-hygiene: wipe containers/data for a clean retest
 ```
 
-PLCSIM, `plc-node`, and LUNA are always check-only — this script never runs a `sudo` command, a
-build, or starts LUNA itself; it prints the exact command, terminal, and expected result.
+`up` builds, installs, configures, and starts everything, including PLCSIM and `plc-node` — any
+`sudo` call happens inside the script, prompting you directly. Only LUNA stays manual (its
+frontend needs the real desktop display).
 
 ## telemetry/
 

@@ -57,10 +57,67 @@ plcsim_check() {
 }
 
 plcsim_up() {
-  plcsim_check
+  if ls "$PLCSIM_REPO"/dist/plc_simulator-*.deb >/dev/null 2>&1; then
+    log "already built: $(ls "$PLCSIM_REPO"/dist/plc_simulator-*.deb)"
+  else
+    log "building PLCSIM package (first run also pulls Git LFS data)"
+    (cd "$PLCSIM_REPO" && git lfs pull && ./build.sh) || { error "FAILED: PLCSIM build"; return 1; }
+    log "created: $(ls "$PLCSIM_REPO"/dist/plc_simulator-*.deb)"
+  fi
+
+  if dpkg -s novarc-plc-simulator >/dev/null 2>&1; then
+    log "already installed: novarc-plc-simulator"
+  else
+    sudo apt install -y "$PLCSIM_REPO"/dist/plc_simulator-*.deb || { error "FAILED: PLCSIM install"; return 1; }
+    log "created: novarc-plc-simulator installed"
+  fi
+
+  if grep -Eq 'bind *= *"127\.0\.0\.1:8081"' "$PLCSIM_CONFIG" 2>/dev/null; then
+    log "already set: REST bind is 127.0.0.1:8081"
+  else
+    sudo sed -i 's|^bind = "127.0.0.1:8080"|bind = "127.0.0.1:8081"|' "$PLCSIM_CONFIG" || { error "FAILED: could not set REST bind"; return 1; }
+    log "created: REST bind set to 127.0.0.1:8081"
+    if systemctl is-active --quiet plc-simulator; then
+      sudo systemctl restart plc-simulator
+      log "restarted: plc-simulator (picked up new port)"
+    fi
+  fi
+
+  if systemctl is-active --quiet plc-simulator; then
+    log "already running: plc-simulator"
+  else
+    sudo systemctl enable --now plc-simulator || { error "FAILED: could not start plc-simulator"; return 1; }
+    log "created: plc-simulator enabled and started"
+  fi
+
+  local tries=0
+  until [ "$tries" -ge 15 ] || { listening "$PLCSIM_FINS_PORT" && listening "$PLCSIM_REST_PORT"; }; do
+    tries=$((tries + 1))
+    sleep 1
+  done
+  if ! listening "$PLCSIM_FINS_PORT"; then
+    error "FAILED: $PLCSIM_FINS_PORT not listening - check: journalctl -u plc-simulator -n 50"
+    return 1
+  fi
+  log "ok: $PLCSIM_FINS_PORT listening"
+  if ! listening "$PLCSIM_REST_PORT"; then
+    error "FAILED: $PLCSIM_REST_PORT not listening - check: journalctl -u plc-simulator -n 50"
+    return 1
+  fi
+  log "ok: $PLCSIM_REST_PORT listening"
+
+  local status
+  status="$(curl -s "http://127.0.0.1:${PLCSIM_REST_PORT}/api/status")"
+  log "ok: $status"
+  return 0
 }
 
 plcsim_down() {
-  log "nothing to stop (never started by this script)"
+  if systemctl is-active --quiet plc-simulator; then
+    sudo systemctl stop plc-simulator
+    log "stopped: plc-simulator"
+  else
+    log "already stopped: plc-simulator"
+  fi
   return 0
 }
