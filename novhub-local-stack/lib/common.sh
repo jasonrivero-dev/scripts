@@ -49,10 +49,11 @@ stop_background() {
     rm -f "$pidfile"
     return 0
   fi
-  local pid
+  local pid pgid
   pid="$(cat "$pidfile")"
+  pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
   log "Stopping $name (pid $pid)"
-  kill "$pid"
+  kill -- "-${pgid:-$pid}" 2>/dev/null || kill "$pid" 2>/dev/null
   rm -f "$pidfile"
 }
 
