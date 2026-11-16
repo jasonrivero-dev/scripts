@@ -1,8 +1,13 @@
 PREREQS_REQUIRED_TOOLS=(docker node npm dotnet git-lfs python3 gh)
 PREREQS_MAX_MAP_COUNT_MIN=262144
+PREREQS_MAX_USER_WATCHES_MIN=524288
 
 _prereqs_max_map_count() {
   sysctl -n vm.max_map_count
+}
+
+_prereqs_max_user_watches() {
+  sysctl -n fs.inotify.max_user_watches
 }
 
 prereqs_check() {
@@ -28,6 +33,15 @@ prereqs_check() {
     return 2
   fi
   log "vm.max_map_count already set ($current >= $PREREQS_MAX_MAP_COUNT_MIN)"
+
+  local watches
+  watches="$(_prereqs_max_user_watches)"
+  if [ "$watches" -lt "$PREREQS_MAX_USER_WATCHES_MIN" ]; then
+    error "fs.inotify.max_user_watches is $watches, NOVAPI+NovApp's file watchers need headroom above $PREREQS_MAX_USER_WATCHES_MIN"
+    error "Run: sudo sysctl -w fs.inotify.max_user_watches=$PREREQS_MAX_USER_WATCHES_MIN"
+    return 2
+  fi
+  log "fs.inotify.max_user_watches already set ($watches >= $PREREQS_MAX_USER_WATCHES_MIN)"
 
   return 0
 }
