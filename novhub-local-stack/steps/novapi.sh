@@ -123,10 +123,14 @@ SQL
 
   start_background novapi bash -c "cd \"$NOVAPI_REPO\" && npm install && exec npm run dev"
 
-  until listening "$NOVAPI_PORT"; do sleep 1; done
+  wait_for_port novapi "$NOVAPI_PORT" || return 1
 
   local ping
   ping="$(curl -s "http://127.0.0.1:${NOVAPI_PORT}/api/v1/ping")"
+  if [ "$ping" != '{"status":"/pong"}' ]; then
+    error "FAILED: NOVAPI listening but ping returned: $ping"
+    return 1
+  fi
   log "ok: $ping"
   return 0
 }
