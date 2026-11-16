@@ -31,7 +31,7 @@ cmd_up() {
 
 cmd_status() {
   prereqs_check || true
-  local name rc
+  local name
   for name in "${ORDERED_STEPS[@]}"; do
     "${name}_check" || true
   done

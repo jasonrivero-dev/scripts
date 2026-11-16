@@ -85,24 +85,27 @@ novapi_up() {
     local pw_hash
     pw_hash="$(printf '%s' "$LOCAL_PASSWORD" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(require('bcryptjs').hashSync(s,10)))")"
 
-    _novapi_psql <<SQL
+    _novapi_psql \
+      -v swr_number="$SWR_NUMBER" -v swr_id="$SWR_ID" -v swr_customer="$SWR_CUSTOMER" \
+      -v swr_location="$SWR_LOCATION" -v secret_key="$SECRET_KEY" -v pw_hash="$pw_hash" \
+      <<'SQL'
 INSERT INTO robot (id, name, customer, location)
-  SELECT $SWR_NUMBER, '$SWR_ID', '$SWR_CUSTOMER', '$SWR_LOCATION'
-  WHERE NOT EXISTS (SELECT 1 FROM robot WHERE id = $SWR_NUMBER);
+  SELECT :swr_number, :'swr_id', :'swr_customer', :'swr_location'
+  WHERE NOT EXISTS (SELECT 1 FROM robot WHERE id = :swr_number);
 INSERT INTO api_key (robot_id, secret_key, iam_access_key_id, iam_secret_access_key, activated)
-  SELECT $SWR_NUMBER, '$SECRET_KEY', 'local-placeholder', 'local-placeholder', true
-  WHERE NOT EXISTS (SELECT 1 FROM api_key WHERE robot_id = $SWR_NUMBER);
+  SELECT :swr_number, :'secret_key', 'local-placeholder', 'local-placeholder', true
+  WHERE NOT EXISTS (SELECT 1 FROM api_key WHERE robot_id = :swr_number);
 INSERT INTO robot_tier (robot_id)
-  SELECT $SWR_NUMBER WHERE NOT EXISTS (SELECT 1 FROM robot_tier WHERE robot_id = $SWR_NUMBER);
+  SELECT :swr_number WHERE NOT EXISTS (SELECT 1 FROM robot_tier WHERE robot_id = :swr_number);
 INSERT INTO groups (name)
-  SELECT '$SWR_ID' WHERE NOT EXISTS (SELECT 1 FROM groups WHERE name = '$SWR_ID');
+  SELECT :'swr_id' WHERE NOT EXISTS (SELECT 1 FROM groups WHERE name = :'swr_id');
 INSERT INTO group_resource (group_id, resource_id, resource_type)
-  SELECT g.id, $SWR_NUMBER, 'robot' FROM groups g WHERE g.name = '$SWR_ID'
-  AND NOT EXISTS (SELECT 1 FROM group_resource gr WHERE gr.group_id = g.id AND gr.resource_id = $SWR_NUMBER AND gr.resource_type = 'robot');
+  SELECT g.id, :swr_number, 'robot' FROM groups g WHERE g.name = :'swr_id'
+  AND NOT EXISTS (SELECT 1 FROM group_resource gr WHERE gr.group_id = g.id AND gr.resource_id = :swr_number AND gr.resource_type = 'robot');
 INSERT INTO roles (name)
   SELECT 'admin' WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name = 'admin');
 INSERT INTO users (name, email, password, company)
-  SELECT 'Sim Admin', 'sim@example.com', '$pw_hash', '$SWR_CUSTOMER'
+  SELECT 'Sim Admin', 'sim@example.com', :'pw_hash', :'swr_customer'
   WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = 'sim@example.com');
 INSERT INTO role_resource (role_id, resource_id, resource_type)
   SELECT r.id, u.id, 'users' FROM roles r, users u WHERE r.name = 'admin' AND u.email = 'sim@example.com'

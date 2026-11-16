@@ -103,13 +103,17 @@ def bulk_body(docs):
 
 
 def main():
-    conn = psycopg2.connect(
-        host=NOVDATA_HOST,
-        port=NOVDATA_PORT,
-        dbname=NOVDATA_DB,
-        user=NOVDATA_USER,
-        password=SWR_DB_KEY,
-    )
+    try:
+        conn = psycopg2.connect(
+            host=NOVDATA_HOST,
+            port=NOVDATA_PORT,
+            dbname=NOVDATA_DB,
+            user=NOVDATA_USER,
+            password=SWR_DB_KEY,
+        )
+    except psycopg2.OperationalError as exc:
+        sys.exit(f"not running: NovData's Postgres ({NOVDATA_HOST}:{NOVDATA_PORT}) - {exc}")
+
     try:
         run_rows = fetch(conn, RUN_QUERY)
         data_rows = fetch(conn, DATA_QUERY)
@@ -122,12 +126,15 @@ def main():
         print("ok: nothing to load (0 completed runs, 0 data points)")
         return
 
-    resp = requests.post(
-        f"{OPENSEARCH_URL}/_bulk",
-        data=bulk_body(docs).encode("utf-8"),
-        headers={"Content-Type": "application/x-ndjson"},
-        timeout=30,
-    )
+    try:
+        resp = requests.post(
+            f"{OPENSEARCH_URL}/_bulk",
+            data=bulk_body(docs).encode("utf-8"),
+            headers={"Content-Type": "application/x-ndjson"},
+            timeout=30,
+        )
+    except requests.exceptions.RequestException as exc:
+        sys.exit(f"not running: OpenSearch ({OPENSEARCH_URL}) - {exc}")
     resp.raise_for_status()
     result = resp.json()
     if result.get("errors"):
