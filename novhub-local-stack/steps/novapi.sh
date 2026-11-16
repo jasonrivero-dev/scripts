@@ -15,7 +15,7 @@ novapi_check() {
     return 1
   fi
   local ping
-  ping="$(curl -s "http://127.0.0.1:${NOVAPI_PORT}/api/v1/ping")"
+  ping="$(curl -s "http://127.0.0.1:${NOVAPI_PORT}/api/v1/auth/ping")"
   if [ "$ping" = '{"status":"/pong"}' ]; then
     log "already running: NOVAPI ($ping)"
     return 0
@@ -126,7 +126,7 @@ SQL
   wait_for_port novapi "$NOVAPI_PORT" || return 1
 
   local ping
-  ping="$(curl -s "http://127.0.0.1:${NOVAPI_PORT}/api/v1/ping")"
+  ping="$(curl -s "http://127.0.0.1:${NOVAPI_PORT}/api/v1/auth/ping")"
   if [ "$ping" != '{"status":"/pong"}' ]; then
     error "FAILED: NOVAPI listening but ping returned: $ping"
     return 1

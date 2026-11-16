@@ -121,7 +121,7 @@ Step 4).
 
 | Call | Purpose |
 |------|---------|
-| `GET http://127.0.0.1:3000/api/v1/ping` → `{"status":"/pong"}` | liveness check for `status`/`up`'s verify phase |
+| `GET http://127.0.0.1:3000/api/v1/auth/ping` → `{"status":"/pong"}` | liveness check for `status`/`up`'s verify phase (corrected from `/api/v1/ping`, see Clarifications) |
 
 `POST /api/v1/admin/robot` (confirmed to exist, `middlewares/config/policy.admin.js`) is
 deliberately never called — the seed goes directly to Postgres instead, matching the runbook
@@ -216,7 +216,7 @@ in that file (confirmed present: `AWS_IAM_KEY`, `SWR_API_KEY`, `SWR_DB_KEY`, `PG
   own statements, unmodified) gated on the `sim@example.com` existence check; `SECRET_KEY`/
   `LOCAL_PASSWORD` via `prompt_secret` only when the seed check fails; password hash via
   NOVAPI's own `bcryptjs`, exactly as the runbook does (`node -e "..."`); background
-  `npm install && npm run dev`; verify via `GET /api/v1/ping`.
+  `npm install && npm run dev`; verify via `GET /api/v1/auth/ping` (corrected from `/api/v1/ping`, see Clarifications).
 - **Verify:** none — the open question on `db_cloud_dev`'s Postgres password is resolved.
 
 ### Step 5: NovApp (`steps/novapp.sh`)
@@ -370,6 +370,7 @@ the real machine and real sibling repos, per this repo's established verificatio
 | 3 | Step 7 (plc-node) | Does the installed config already point at the simulator? What's the real build output path? | No — shipped template has the real PLC address active; needs an edit every time, nothing rewrites it post-install. Output: `package/plc_node-ubuntu_22.04-x64-<ver>.deb` (git-ignored, created by `./build_docker.sh package`; `<ver>` = CMake project version + build number, e.g. `1.0.2.dev`). | PLCNODE peer session | 2026-11-12 |
 | 4 | Step 3 (NovData) | Does NovData need `SWR_DB_KEY` on every start, or only during first-time role setup? | Every start — `Logger.cs` builds its connection string from `SWR_DB_KEY` fresh at construction on every process launch (`DbUtils.cs:22`, no default, throws if unset); the `novdata`/`noveye` roles already existing in Postgres is irrelevant. The prompt must be gated on `prompt_secret`'s own skip-when-already-set behavior (matching the runbook), never on the roles-exists check — the original TRD text was wrong and has been corrected above. | NovData peer session | 2026-11-13 |
 | 5 | Step 5 (NovApp) | Does `npm run dev` (vite) actually honor `VITE_PORT` from `.env`? | No — `vite.config.ts` never reads `process.env.VITE_PORT`; it only reads `VITE_IS_NOVAI` (for the `@brand` alias). Vite's dev server defaults to port 5173 unconditionally, which happens to match the intended value, so `ensure_env_kv`'s `VITE_PORT` correction is cosmetically right but functionally inert — `listening 5173` remains a valid verify check regardless. | Code: `~/dev/novhub/vite.config.ts` | 2026-11-16 |
+| 6 | Step 4 (NOVAPI) | Is `GET /api/v1/ping` a real, authorized health-check route? | No — confirmed by reading `middlewares/enforcePolicy.js:81-84` (deny-by-default, 403 when no policy rule matches) and `policy.misc.js:172`: no rule has ever existed for `/api/v1/ping`; `git log -S` on the policy files finds none. The real, intended public health check is `GET /api/v1/auth/ping` (`policy.misc.js:172`, `callers: ["public"]`), which returns the same `{"status":"/pong"}` — confirmed live. Corrected both `novapi_check` and `novapi_up`'s verify to use it. | NOVAPI peer session | 2026-11-16 |
 
 ## Traceability Matrix
 
