@@ -203,7 +203,9 @@ in that file (confirmed present: `AWS_IAM_KEY`, `SWR_API_KEY`, `SWR_DB_KEY`, `PG
 
 ### Step 4: NOVAPI (`steps/novapi.sh`)
 
-- **Files:** `steps/novapi.sh`
+- **Files:** `steps/novapi.sh`, `lib/common.sh` (add the shared `ensure_env_kv(file, key, value)`
+  helper described in Stack Decisions — omitted from Step 0's file list by a drafting gap; it
+  belongs in `common.sh` since Step 5 (NovApp) needs the same helper)
 - **What:** `docker compose up -d db_cloud_dev` (confirmed service/port/user, password per
   Clarifications #1); the migration loop (confirmed: 80 files, first-by-name ordering matches
   the runbook exactly); `.env` creation from `.env.sample` if missing, then `ensure_env_kv` for

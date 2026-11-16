@@ -67,6 +67,23 @@ prompt_secret() {
   export "$varname"
 }
 
+ensure_env_kv() {
+  local file="$1" key="$2" value="$3"
+  if grep -qE "^${key}=" "$file"; then
+    local current
+    current="$(grep -E "^${key}=" "$file" | head -1 | cut -d= -f2-)"
+    if [ "$current" = "$value" ]; then
+      log "already set: $key=$value"
+    else
+      sed -i -E "s|^${key}=.*|${key}=${value}|" "$file"
+      log "corrected: $key=$value (was $current)"
+    fi
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$file"
+    log "created: $key=$value"
+  fi
+}
+
 read_identity() {
   local conf="/var/opt/novarc/configure"
   if [ ! -f "$conf" ]; then
