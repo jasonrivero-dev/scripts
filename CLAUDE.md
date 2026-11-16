@@ -139,6 +139,8 @@ and to build/deploy/QA an EC2 licensing box.
 - `celeste/` — build/launch/log tooling for Celeste (incl. `ffmpeg-crash/` crash repro)
 - `licensing/` — `novarc-licensing` CLI wrapper, EC2 deploy/uninstall, hardware-ID/Keygen/TPM
 - `luna/` — build and run scripts for native Luna execution (backend, frontend, bundling)
+- `novhub-local-stack/` — brings up the full local NovHub stack (weld-data and control paths)
+  for manual validation, idempotently, across seven checkouts; see its own `run-novhub.sh`
 - `telemetry/` — Vector/Prometheus/Grafana stack control, mocks, configure templates
 - `tools/` — Jira and GitHub PR CLI wrappers, Markdown-to-HTML converter, Markdown-to-Word
   (local `.docx` + Google Drive upload, native Google Docs conversion)

@@ -11,6 +11,7 @@ The repo is organized by topic:
 | [`celeste/`](celeste/) | Celeste host build, launch, setup, logging, coverage, metrics/PLC helpers, FFmpeg crash repro |
 | [`licensing/`](licensing/) | `novarc-licensing` CLI wrapper, EC2 QA deploy/uninstall, Keygen checkout test, TPM hardware ID |
 | [`luna/`](luna/) | Native (no Docker) build/run tooling for the separate `~/dev/luna` checkout — Go backend, Flutter Linux frontend, `.deb` packaging |
+| [`novhub-local-stack/`](novhub-local-stack/) | Brings up the full local NovHub stack (weld-data and control paths) for manual validation, idempotently, across seven checkouts |
 | [`telemetry/`](telemetry/) | Vector/Prometheus/Grafana stack control, test environment loader, mocks, configure templates |
 | [`tools/`](tools/) | Diverse one-off utilities: Jira CLI wrappers, Markdown-to-HTML converter, Markdown-to-Google-Docs converter |
 | [`lib/`](lib/) | Shared logging helpers sourced by scripts in `celeste/`, `telemetry/`, and `luna/` |
@@ -269,6 +270,25 @@ QA steps, lives in [`luna/README.md`](luna/README.md); summary here:
 ```
 
 [`luna/build-backend.sh`](luna/build-backend.sh) is the Go-only side (deps/toolchain/generate/build/test), independent of the Flutter frontend. `sudo` steps (`config`, and `frontend-toolchain` if apt packages are missing) need a real terminal and aren't run by an agent.
+
+## novhub-local-stack/
+
+Brings up the full local NovHub stack for manual validation — the weld-data path (PLCSIM →
+NovData → an OpenSearch loader → NOVAPI → NovApp) and the control path (LUNA → `plc-node` →
+PLCSIM) — idempotently, stopping at the first step that needs a `sudo` command, a build, or a
+manual terminal. Full detail (secrets, prerequisites, what `down` does and doesn't do) lives in
+[`novhub-local-stack/README.md`](novhub-local-stack/README.md); summary here:
+
+```bash
+./novhub-local-stack/run-novhub.sh up      # bring the automatable parts up, in order
+./novhub-local-stack/run-novhub.sh status  # report every component's state, change nothing
+./novhub-local-stack/run-novhub.sh down    # stop everything this script started; keeps data
+./novhub-local-stack/run-novhub.sh sync    # load the latest weld into OpenSearch, then NovSync
+./novhub-local-stack/reset.sh --all        # dev-hygiene: wipe containers/data for a clean retest
+```
+
+PLCSIM, `plc-node`, and LUNA are always check-only — this script never runs a `sudo` command, a
+build, or starts LUNA itself; it prints the exact command, terminal, and expected result.
 
 ## telemetry/
 
