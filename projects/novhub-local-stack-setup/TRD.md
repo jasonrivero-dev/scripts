@@ -250,7 +250,7 @@ in that file (confirmed present: `AWS_IAM_KEY`, `SWR_API_KEY`, `SWR_DB_KEY`, `PG
 - **What:** check-only for build (`./build_docker.sh package`, which runs `deb/package.sh`
   after the build stages — confirmed, not a literal `deps/generate/build/package` case inside
   `build_docker.sh` itself), install (`sudo apt install`), log directory (`sudo install -d`),
-  and service start — same check-and-instruct shape as Step 5. The build-output check looks for
+  and service start — same check-and-instruct shape as Step 6 (PLCSIM). The build-output check looks for
   `package/plc_node-ubuntu_22.04-x64-*.deb` (confirmed path and naming from the PLCNODE peer
   session, see Clarifications #3; `package/` is git-ignored and created by the build, version
   is the CMake project version plus a build number, e.g. `1.0.2.dev` when unset). The
@@ -258,8 +258,10 @@ in that file (confirmed present: `AWS_IAM_KEY`, `SWR_API_KEY`, `SWR_DB_KEY`, `PG
   peer session) the shipped template has the **real** PLC address active
   (`192.168.250.1:9600`), simulator address (`127.0.0.1:9600`) only commented out, and nothing
   in the install path rewrites it — so this check always inspects the live value and, when it
-  isn't `127.0.0.1:9600`, prints the exact `sudoedit` instruction (same shape as PLCSIM's own
-  port-move step) rather than skipping. `grpc-bind-address`/`listening 9601` checks unchanged.
+  isn't `127.0.0.1:9600`, prints the runbook's own `sudo sed -i -E '...'` one-liner (precise,
+  non-interactive — unlike PLCSIM's `sudoedit`, this is a single top-level key, so the runbook
+  uses a scripted substitution here, not manual editing) rather than skipping. `grpc-bind-address`/
+  `listening 9601` checks unchanged.
   `plcnode_down` is a no-op (`nothing to stop (never started by this script)`), same reasoning
   as PLCSIM.
 - **Verify:** none — both open questions for this step are now resolved (see above).
