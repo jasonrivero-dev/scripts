@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/steps/novapp.sh"
 source "$SCRIPT_DIR/steps/plcsim.sh"
 source "$SCRIPT_DIR/steps/plcnode.sh"
 source "$SCRIPT_DIR/steps/luna.sh"
+source "$SCRIPT_DIR/steps/sync.sh"
 
 ORDERED_STEPS=(opensearch novdata novapi novapp plcsim plcnode luna)
 
@@ -51,8 +52,9 @@ case "$cmd" in
   up) cmd_up ;;
   status) cmd_status ;;
   down) cmd_down ;;
+  sync) sync_up ;;
   *)
-    error "Unknown command: $cmd (expected: up|status|down)"
+    error "Unknown command: $cmd (expected: up|status|down|sync)"
     exit 1
     ;;
 esac
