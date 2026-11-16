@@ -53,12 +53,18 @@ and `/tmp/luna-logs/`.
 | `frontend-toolchain` | apt deps for Flutter Linux + fetches Flutter 3.19.5 SDK | Only if apt packages are missing |
 | `frontend-generate` | Dart flatbuffers, proto copy, well-known protobuf types, `build_runner build` | No |
 | `backend` | Runs `./luna` in the foreground | No |
-| `frontend` | Runs `flutter run -d linux` in the foreground | No |
+| `frontend` | Runs `flutter run -d linux` in the foreground | Yes, first run only (creates `/var/log/novarc/weld`) |
 | `bundle [version]` | `flutter build linux --release` + `deb/package.sh` → installable `.deb` | No |
 | `all` | `config` + `binary` + `frontend-toolchain` + `frontend-generate`, then tells you to run `backend`/`frontend` yourself | First run only |
 
-`sudo` steps need a real terminal (can't be run by an agent/non-interactive tool) — run them
-yourself if a fresh checkout needs them again.
+`run-luna.sh` takes `--help`. `sudo` steps need a real terminal (can't be run by an
+agent/non-interactive tool) — run them yourself if a fresh checkout needs them again.
+
+The frontend writes its weld log to `/var/log/novarc/weld/weld_<date>.log` — hardcoded in
+`main.dart`, with no fallback if the directory is missing or not writable. `run-luna.sh frontend`
+creates it (owned by you, not `novarc`) before starting Flutter, so this should never need manual
+intervention; if you ever see `PathAccessException: ... Permission denied` on that path, that step
+didn't run (e.g. you launched `flutter run` directly instead of through this script).
 
 ## Packaging a `.deb` for the testbench
 

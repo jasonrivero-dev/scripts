@@ -104,6 +104,15 @@ prompting for `sudo` directly in your terminal only when needed:
   point its config at PLCSIM (`sudo sed`, re-applied automatically if a later reinstall reverts
   it) → `sudo install -d` its log directory → start it as the `novarc` user in the background.
 
+  `plc-node` picks its entire PLC tag map from the `SWR_TYPE` env var it's started with — the two
+  sets are never merged: unset (the default here) loads the full `mem-map.cfg`/`alarms.cfg`
+  (`weld_Mode_Current`, `Estop_Pressed`, etc. — what LUNA needs); `SWR_TYPE=NOVAI` loads the small
+  `novai-mem-map.cfg`/`novai-alarms.cfg` instead (`HMI_NovAI_Mode`, etc.). This machine's own
+  `/var/opt/novarc/configure` says `SWR_TYPE=NOVAI`, but LUNA's backend/frontend read that file
+  directly and independently of what we pass to `plc-node` — the two don't have to match. Override
+  with `PLCNODE_SWR_TYPE=NOVAI ./novhub-local-stack/run-novhub.sh up` if NovAI-mode tags are needed
+  instead; doing so will bring back "could not find the item" errors for the full-map-only tags.
+
 ## Manual steps (LUNA only)
 
 LUNA's frontend needs the real desktop display, which nothing running non-interactively can

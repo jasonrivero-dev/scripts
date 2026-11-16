@@ -2,6 +2,30 @@
 # Runs Luna (backend + frontend) natively on this host for manual QA. No Docker.
 set -euo pipefail
 
+usage() {
+  cat <<USAGE
+Usage: run-luna.sh [config|binary|frontend-toolchain|frontend-generate|backend|frontend|bundle [version]|all]
+
+  config               install /opt/novarc/apps/luna/etc/config.toml (sudo, first run only)
+  binary               go build ./luna-backend -> luna
+  frontend-toolchain   apt deps for Flutter Linux + fetch Flutter SDK (sudo only if packages are missing)
+  frontend-generate    Dart flatbuffers/proto codegen + build_runner build
+  backend              run ./luna in the foreground
+  frontend             run flutter run -d linux in the foreground
+  bundle [version]     flutter build linux --release + deb/package.sh -> installable .deb
+  all (default)        config + binary + frontend-toolchain + frontend-generate, then prints
+                        the backend/frontend commands to run yourself
+
+Run after pulling new code: binary (backend changed) and/or frontend-generate (schemas changed),
+then backend/frontend/bundle as above.
+USAGE
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  usage
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 # shellcheck source=../lib/dev-log-lib
 source "$SCRIPT_DIR/../lib/dev-log-lib"
@@ -110,6 +134,14 @@ step_backend() {
 }
 
 step_frontend() {
+  local weld_log_dir="/var/log/novarc/weld"
+  if [ -d "$weld_log_dir" ] && [ -w "$weld_log_dir" ]; then
+    log "Already present and writable: $weld_log_dir"
+  else
+    log "Creating $weld_log_dir (sudo required) - the frontend writes its weld log here and has no fallback if it's missing"
+    sudo mkdir -p "$weld_log_dir"
+    sudo chown "$(id -u):$(id -g)" "$weld_log_dir"
+  fi
   export PATH="$CACHE_DIR/flutter/bin:$PATH"
   cd "$FRONTEND_DIR"
   log "Starting flutter run -d linux"

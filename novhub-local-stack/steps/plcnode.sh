@@ -4,6 +4,10 @@ PLCNODE_CONFIG="$PLCNODE_ETC/plc-node.cfg.toml"
 PLCNODE_BIN_DIR="/opt/novarc/apps/plc_node/bin"
 PLCNODE_LOG_DIR="/var/log/novarc/plc_node"
 PLCNODE_GRPC_PORT=9601
+# Unset (default) = full mem-map.cfg/alarms.cfg (weld_Mode_Current, Estop_Pressed, etc).
+# "NOVAI" = the small novai-mem-map.cfg/novai-alarms.cfg instead (HMI_NovAI_Mode etc.) - the two
+# sets are never merged, so only one is ever loaded.
+PLCNODE_SWR_TYPE="${PLCNODE_SWR_TYPE:-}"
 
 plcnode_check() {
   if ls "$PLCNODE_REPO"/package/plc_node-*.deb >/dev/null 2>&1; then
@@ -55,7 +59,7 @@ plcnode_check() {
   fi
 
   warn "manual: start plc-node (a terminal of its own, keep it running - start PLCSIM first)"
-  warn "  (cd $PLCNODE_BIN_DIR && sudo -u novarc env SWR_TYPE=NOVAI LD_LIBRARY_PATH=$PLCNODE_BIN_DIR/../lib ./plc_node)"
+  warn "  (cd $PLCNODE_BIN_DIR && sudo -u novarc env ${PLCNODE_SWR_TYPE:+SWR_TYPE=$PLCNODE_SWR_TYPE }LD_LIBRARY_PATH=$PLCNODE_BIN_DIR/../lib ./plc_node)"
   warn "  expect: \"PLC model: ...\" then \"Server listening on 127.0.0.1:9601\""
   return 2
 }
@@ -111,7 +115,9 @@ plcnode_up() {
   # Prime the sudo ticket in the foreground - the background job below runs as novarc
   # and can't accept an interactive password prompt once detached.
   sudo -v || { error "FAILED: sudo authentication needed to start plc-node as the novarc user"; return 1; }
-  start_background plcnode bash -c "cd \"$PLCNODE_BIN_DIR\" && exec sudo -u novarc env SWR_TYPE=NOVAI LD_LIBRARY_PATH=\"$PLCNODE_BIN_DIR/../lib\" ./plc_node"
+  local swr_type_env=""
+  [ -n "$PLCNODE_SWR_TYPE" ] && swr_type_env="SWR_TYPE=$PLCNODE_SWR_TYPE "
+  start_background plcnode bash -c "cd \"$PLCNODE_BIN_DIR\" && exec sudo -u novarc env ${swr_type_env}LD_LIBRARY_PATH=\"$PLCNODE_BIN_DIR/../lib\" ./plc_node"
   wait_for_port plcnode "$PLCNODE_GRPC_PORT" || return 1
   log "ok: $PLCNODE_GRPC_PORT listening"
   return 0
