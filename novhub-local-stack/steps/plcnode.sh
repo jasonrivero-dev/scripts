@@ -9,10 +9,14 @@ plcnode_check() {
   if ls "$PLCNODE_REPO"/package/plc_node-*.deb >/dev/null 2>&1; then
     log "already built: $(ls "$PLCNODE_REPO"/package/plc_node-*.deb)"
   else
-    warn "manual: build the plc-node package (terminal T1)"
+    warn "manual: build the plc-node package (terminal T1, the first 'deps' run is slow)"
     warn "  cd $PLCNODE_REPO"
     warn "  export GH_TOKEN=\$(gh auth token)"
-    warn "  ./build_docker.sh package"
+    warn "  ./build_docker.sh deps"
+    warn "  ./build_docker.sh generate"
+    warn "  ./build_docker.sh build"
+    warn "  sudo chown -R \"\$USER\" ."
+    warn "  ./deb/package.sh"
     return 2
   fi
 
@@ -50,10 +54,9 @@ plcnode_check() {
     return 0
   fi
 
-  warn "manual: start plc-node (a terminal of its own, keep it running)"
-  warn "  ls $PLCNODE_BIN_DIR"
-  warn "  (cd $PLCNODE_BIN_DIR && sudo -u novarc env SWR_TYPE=NOVAI ./plc_node)"
-  warn "  if ./plc_node does not exist, use the executable the listing shows"
+  warn "manual: start plc-node (a terminal of its own, keep it running - start PLCSIM first)"
+  warn "  (cd $PLCNODE_BIN_DIR && sudo -u novarc env SWR_TYPE=NOVAI LD_LIBRARY_PATH=$PLCNODE_BIN_DIR/../lib ./plc_node)"
+  warn "  expect: \"PLC model: ...\" then \"Server listening on 127.0.0.1:9601\""
   return 2
 }
 

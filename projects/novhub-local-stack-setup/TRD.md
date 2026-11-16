@@ -233,11 +233,14 @@ in that file (confirmed present: `AWS_IAM_KEY`, `SWR_API_KEY`, `SWR_DB_KEY`, `PG
 
 - **Files:** `steps/plcsim.sh`
 - **What:** check-only for every stage (`.deb` build via `git lfs pull && ./build.sh`; install
-  via `sudo apt install`; the `[rest].bind` port-move via `sudoedit`; `sudo systemctl enable
-  --now plc-simulator`) — each prints the runbook's exact command, the terminal to run it in
-  (T1, this runbook has no dedicated PLCSIM terminal beyond T1), and the expected result, then
-  returns `manual` (exit 2) if not yet done. Verify phase (no `sudo`) checks `listening 9600`,
-  `listening 8081`, and `GET http://127.0.0.1:8081/api/status`. `plcsim_down` is a no-op
+  via `sudo apt install`; the `[rest].bind` port-move via a `sudo sed` one-liner — corrected from
+  an earlier `sudoedit` instruction, see Clarifications #7: PLCSIM's peer session confirmed
+  `bind =` is the only such key in the file, same as `plc-node`'s config fix, so a scripted
+  substitution is safe; `sudo systemctl enable --now plc-simulator`) — each prints the runbook's
+  exact command, the terminal to run it in (T1, this runbook has no dedicated PLCSIM terminal
+  beyond T1), and the expected result, then returns `manual` (exit 2) if not yet done. Verify
+  phase (no `sudo`) checks `listening 9600`, `listening 8081`, and
+  `GET http://127.0.0.1:8081/api/status`. `plcsim_down` is a no-op
   (`nothing to stop (never started by this script)`) — this script never runs
   `systemctl enable --now`, so it has nothing of its own to stop.
 - **Verify:** none of this needs root to *check* — only to act — so `plcsim_check` can run
@@ -247,9 +250,10 @@ in that file (confirmed present: `AWS_IAM_KEY`, `SWR_API_KEY`, `SWR_DB_KEY`, `PG
 ### Step 7: `plc-node` (`steps/plcnode.sh`)
 
 - **Files:** `steps/plcnode.sh`
-- **What:** check-only for build (`./build_docker.sh package`, which runs `deb/package.sh`
-  after the build stages — confirmed, not a literal `deps/generate/build/package` case inside
-  `build_docker.sh` itself), install (`sudo apt install`), log directory (`sudo install -d`),
+- **What:** check-only for build (corrected from the runbook's own wrong single-command
+  shortcut — see Clarifications #8: PLCNODE's peer session confirmed `./build_docker.sh package`
+  alone fails outright; the real sequence is `deps`, `generate`, `build`, `sudo chown -R "$USER" .`,
+  then `./deb/package.sh`), install (`sudo apt install`), log directory (`sudo install -d`),
   and service start — same check-and-instruct shape as Step 6 (PLCSIM). The build-output check looks for
   `package/plc_node-ubuntu_22.04-x64-*.deb` (confirmed path and naming from the PLCNODE peer
   session, see Clarifications #3; `package/` is git-ignored and created by the build, version
@@ -371,6 +375,8 @@ the real machine and real sibling repos, per this repo's established verificatio
 | 4 | Step 3 (NovData) | Does NovData need `SWR_DB_KEY` on every start, or only during first-time role setup? | Every start — `Logger.cs` builds its connection string from `SWR_DB_KEY` fresh at construction on every process launch (`DbUtils.cs:22`, no default, throws if unset); the `novdata`/`noveye` roles already existing in Postgres is irrelevant. The prompt must be gated on `prompt_secret`'s own skip-when-already-set behavior (matching the runbook), never on the roles-exists check — the original TRD text was wrong and has been corrected above. | NovData peer session | 2026-11-13 |
 | 5 | Step 5 (NovApp) | Does `npm run dev` (vite) actually honor `VITE_PORT` from `.env`? | No — `vite.config.ts` never reads `process.env.VITE_PORT`; it only reads `VITE_IS_NOVAI` (for the `@brand` alias). Vite's dev server defaults to port 5173 unconditionally, which happens to match the intended value, so `ensure_env_kv`'s `VITE_PORT` correction is cosmetically right but functionally inert — `listening 5173` remains a valid verify check regardless. | Code: `~/dev/novhub/vite.config.ts` | 2026-11-16 |
 | 6 | Step 4 (NOVAPI) | Is `GET /api/v1/ping` a real, authorized health-check route? | No — confirmed by reading `middlewares/enforcePolicy.js:81-84` (deny-by-default, 403 when no policy rule matches) and `policy.misc.js:172`: no rule has ever existed for `/api/v1/ping`; `git log -S` on the policy files finds none. The real, intended public health check is `GET /api/v1/auth/ping` (`policy.misc.js:172`, `callers: ["public"]`), which returns the same `{"status":"/pong"}` — confirmed live. Corrected both `novapi_check` and `novapi_up`'s verify to use it. | NOVAPI peer session | 2026-11-16 |
+| 7 | Step 6 (PLCSIM) | Is the REST port-move a `sudoedit` (manual) or a safe scripted substitution? | Scripted — confirmed `bind =` is the only such key in `plc-simulator.toml`'s `[rest]` section, default `127.0.0.1:8080`. Fix: `sudo sed -i 's\|^bind = "127.0.0.1:8080"\|bind = "127.0.0.1:8081"\|' /opt/novarc/dev/plc_simulator/etc/plc-simulator.toml`. Also confirmed: PLCSIM starts independently of plc-node (no dependency), but the service **fails to start at all** if this port isn't moved first (exits repeatedly with a bind error). Start order: NovData, then PLCSIM, then plc-node, then LUNA. | PLCSIM peer session | 2026-11-16 |
+| 8 | Step 7 (plc-node) | Does `./build_docker.sh package` alone build the `.deb`? | No — confirmed by reading `build_docker.sh`, `build.ps1`, `deb/package.sh`: that single command fails outright ("Please specify the build number") and would produce a `.zip`, not a `.deb`, even with one. The real sequence (matching CI): `export GH_TOKEN=$(gh auth token)`, then `./build_docker.sh deps` (slow — builds all Conan deps from source), `./build_docker.sh generate`, `./build_docker.sh build`, `sudo chown -R "$USER" .` (container runs as root), then `./deb/package.sh`. Also confirmed: the manual start command was missing `LD_LIBRARY_PATH=/opt/novarc/apps/plc_node/lib` (needed for bundled gRPC/protobuf libs); plc-node tolerates PLCSIM being down (retries with growing backoff, no hard dependency), but start PLCSIM first in practice. | PLCNODE peer session | 2026-11-16 |
 
 ## Traceability Matrix
 

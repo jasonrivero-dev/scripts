@@ -23,9 +23,8 @@ plcsim_check() {
   if grep -Eq 'bind *= *"127\.0\.0\.1:8081"' "$PLCSIM_CONFIG" 2>/dev/null; then
     log "already set: REST bind is 127.0.0.1:8081"
   else
-    warn "manual: move PLCSIM's REST port (terminal T1)"
-    warn "  sudoedit $PLCSIM_CONFIG"
-    warn "  under [rest], set bind = \"127.0.0.1:8081\"; leave fins.tcp/fins.udp at 9600"
+    warn "manual: move PLCSIM's REST port (terminal T1) - required, the service won't start without this"
+    warn "  sudo sed -i 's|^bind = \"127.0.0.1:8080\"|bind = \"127.0.0.1:8081\"|' $PLCSIM_CONFIG"
     warn "  then, if the service is already running:"
     warn "  systemctl is-active --quiet plc-simulator && sudo systemctl restart plc-simulator"
     return 2
