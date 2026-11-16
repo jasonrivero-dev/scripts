@@ -1,8 +1,8 @@
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NOVHUB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../lib/dev-log-lib
-source "$SCRIPT_DIR/../../lib/dev-log-lib"
+source "$NOVHUB_LIB_DIR/../../lib/dev-log-lib"
 
-NOVHUB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+NOVHUB_ROOT="$(cd "$NOVHUB_LIB_DIR/.." && pwd)"
 STATE_DIR="${NOVHUB_STATE_DIR:-$NOVHUB_ROOT/.state}"
 mkdir -p "$STATE_DIR"
 

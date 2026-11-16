@@ -57,6 +57,10 @@ plcsim_check() {
   return 0
 }
 
+plcsim_up() {
+  plcsim_check
+}
+
 plcsim_down() {
   log "nothing to stop (never started by this script)"
   return 0

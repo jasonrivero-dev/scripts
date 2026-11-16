@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/steps/prereqs.sh"
+source "$SCRIPT_DIR/steps/opensearch.sh"
+source "$SCRIPT_DIR/steps/novdata.sh"
+source "$SCRIPT_DIR/steps/novapi.sh"
+source "$SCRIPT_DIR/steps/novapp.sh"
+source "$SCRIPT_DIR/steps/plcsim.sh"
+source "$SCRIPT_DIR/steps/plcnode.sh"
+source "$SCRIPT_DIR/steps/luna.sh"
+
+ORDERED_STEPS=(opensearch novdata novapi novapp plcsim plcnode luna)
+
+cmd_up() {
+  prereqs_check || return $?
+  local name rc
+  for name in "${ORDERED_STEPS[@]}"; do
+    if "${name}_up"; then
+      continue
+    else
+      rc=$?
+      return "$rc"
+    fi
+  done
+  return 0
+}
+
+cmd_status() {
+  prereqs_check || true
+  local name rc
+  for name in "${ORDERED_STEPS[@]}"; do
+    "${name}_check" || true
+  done
+  return 0
+}
+
+cmd_down() {
+  local i name rc failed=0
+  for ((i = ${#ORDERED_STEPS[@]} - 1; i >= 0; i--)); do
+    name="${ORDERED_STEPS[$i]}"
+    "${name}_down" || { warn "could not stop: $name"; failed=1; }
+  done
+  return "$failed"
+}
+
+cmd="${1:-status}"
+case "$cmd" in
+  up) cmd_up ;;
+  status) cmd_status ;;
+  down) cmd_down ;;
+  *)
+    error "Unknown command: $cmd (expected: up|status|down)"
+    exit 1
+    ;;
+esac

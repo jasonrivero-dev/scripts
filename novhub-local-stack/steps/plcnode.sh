@@ -57,6 +57,10 @@ plcnode_check() {
   return 2
 }
 
+plcnode_up() {
+  plcnode_check
+}
+
 plcnode_down() {
   log "nothing to stop (never started by this script)"
   return 0
