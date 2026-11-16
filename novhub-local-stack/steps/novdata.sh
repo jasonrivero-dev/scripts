@@ -56,6 +56,7 @@ novdata_up() {
   if [ "$role_count" = "2" ]; then
     log "already created: roles novdata and noveye"
   else
+    log "running initial-roles.sql (a 'database \"swrdb\" already exists' error below is expected and harmless - the container already created it; roles still get created)"
     docker exec -i "$NOVDATA_CONTAINER" psql -U postgres -f - < "$NOVDATA_REPO/res/initial-roles.sql" >/dev/null
     log "created: roles novdata and noveye"
   fi
