@@ -59,6 +59,9 @@ novapi_up() {
   fi
 
   cd "$NOVAPI_REPO"
+  npm install
+  log "ok: NovApi dependencies installed"
+
   if [ -f .env ]; then
     log "already exists: .env (left as it is)"
   else
@@ -84,6 +87,10 @@ novapi_up() {
 
     local pw_hash
     pw_hash="$(printf '%s' "$LOCAL_PASSWORD" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(require('bcryptjs').hashSync(s,10)))")"
+    if [ -z "$pw_hash" ]; then
+      error "FAILED: could not hash the NovApp password (bcryptjs via node) - not seeding a broken row"
+      return 1
+    fi
 
     _novapi_psql \
       -v swr_number="$SWR_NUMBER" -v swr_id="$SWR_ID" -v swr_customer="$SWR_CUSTOMER" \
