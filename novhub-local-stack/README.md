@@ -22,9 +22,13 @@ desktop display, which nothing running non-interactively can check or start.
 | `setup-host.sh` | One-time host sysctl setup (the three kernel limits below) |
 | `reset.sh` | Dev-hygiene: selectively wipe containers/data, or stop just PLCSIM+`plc-node` |
 | `loader.py` | OpenSearch loader — reads NovData's Postgres, posts to `novhub-local` (used by `sync`, never run directly) |
+| `perf-setup.sh` | HUB-106: one-time install of Playwright (owner-run) for browser HAR/trace capture |
+| `perf-seed.sh` | HUB-106: seed/remove a frozen synthetic dataset (10 robots × 2,000 runs) in OpenSearch + NovApi's Postgres, for perf testing |
+| `perf-seed.py` | The actual seed/remove logic `perf-seed.sh` calls — not run directly |
+| `novapi-psql.sh` | Opens `psql` against NovApi's own Postgres (`cloud_db_dev`) — no password needed, runs inside the container |
 | `steps/*.sh` | One file per component (`opensearch`, `novdata`, `novapi`, `novapp`, `plcsim`, `plcnode`, `luna`, `sync`, `prereqs`) — sourced by `run-novhub.sh`/`reset.sh`, not run directly |
 
-All three top-level scripts take `--help`.
+Every script meant to be run directly takes `-h`/`--help`.
 
 ## Usage
 
@@ -112,6 +116,25 @@ prompting for `sudo` directly in your terminal only when needed:
   directly and independently of what we pass to `plc-node` — the two don't have to match. Override
   with `PLCNODE_SWR_TYPE=NOVAI ./novhub-local-stack/run-novhub.sh up` if NovAI-mode tags are needed
   instead; doing so will bring back "could not find the item" errors for the full-map-only tags.
+
+## HUB-106 perf-testing tools
+
+```bash
+./novhub-local-stack/perf-setup.sh          # one-time: install Playwright (prompts for sudo on the Chromium/apt step)
+./novhub-local-stack/perf-seed.sh seed      # create the frozen synthetic dataset (10 robots x 2,000 runs)
+./novhub-local-stack/perf-seed.sh remove    # delete exactly what seed created, nothing else
+./novhub-local-stack/novapi-psql.sh -c "select count(*) from weld_test_reports;"   # one-shot query, no password
+./novhub-local-stack/novapi-psql.sh         # interactive psql prompt, no password
+```
+
+`perf-seed.sh seed` writes directly to OpenSearch and NovApi's own Postgres — never through
+LUNA/PLCSIM/plc-node or NovData — so it needs `run-novhub.sh up`'s OpenSearch container and
+NovApi's own `docker compose` stack running first, not the whole local stack. Everything it
+creates is tagged (a reserved robot-id range, one synthetic group/user) so `remove` can undo it
+cleanly; it's idempotent, re-running `seed` on an already-seeded stack just prints
+`already seeded`. The synthetic test user's login is written to
+`.state/secrets/perf-test-user.secret` (0600, in a 0700 directory) — never printed twice, never
+logged elsewhere.
 
 ## Manual steps (LUNA only)
 
