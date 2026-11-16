@@ -1,7 +1,8 @@
 PREREQS_REQUIRED_TOOLS=(docker node npm dotnet git-lfs python3 gh)
 PREREQS_MAX_MAP_COUNT_MIN=262144
 PREREQS_MAX_USER_WATCHES_MIN=524288
-PREREQS_MIN_OPEN_FILES=4096
+PREREQS_MAX_USER_INSTANCES_MIN=1024
+PREREQS_MIN_OPEN_FILES=65536
 
 _prereqs_max_map_count() {
   sysctl -n vm.max_map_count
@@ -9,6 +10,10 @@ _prereqs_max_map_count() {
 
 _prereqs_max_user_watches() {
   sysctl -n fs.inotify.max_user_watches
+}
+
+_prereqs_max_user_instances() {
+  sysctl -n fs.inotify.max_user_instances
 }
 
 prereqs_check() {
@@ -43,6 +48,15 @@ prereqs_check() {
     return 2
   fi
   log "fs.inotify.max_user_watches already set ($watches >= $PREREQS_MAX_USER_WATCHES_MIN)"
+
+  local instances
+  instances="$(_prereqs_max_user_instances)"
+  if [ "$instances" -lt "$PREREQS_MAX_USER_INSTANCES_MIN" ]; then
+    error "fs.inotify.max_user_instances is $instances, below $PREREQS_MAX_USER_INSTANCES_MIN - nodemon/vite's inotify_init() fails with EMFILE when this is exhausted"
+    error "Run: ./novhub-local-stack/setup-host.sh"
+    return 2
+  fi
+  log "fs.inotify.max_user_instances already set ($instances >= $PREREQS_MAX_USER_INSTANCES_MIN)"
 
   local nofile
   nofile="$(ulimit -n)"

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # NovData+NOVAPI+NovApp's file watchers can exceed a typical shell's 1024-fd default together.
 # Raising the soft limit needs no sudo, up to the hard ceiling.
-ulimit -n 4096 2>/dev/null || true
+ulimit -n 65536 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
