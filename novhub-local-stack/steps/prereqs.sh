@@ -30,7 +30,7 @@ prereqs_check() {
   current="$(_prereqs_max_map_count)"
   if [ "$current" -lt "$PREREQS_MAX_MAP_COUNT_MIN" ]; then
     error "vm.max_map_count is $current, OpenSearch needs at least $PREREQS_MAX_MAP_COUNT_MIN"
-    error "Run: sudo sysctl -w vm.max_map_count=$PREREQS_MAX_MAP_COUNT_MIN"
+    error "Run: ./novhub-local-stack/setup-host.sh"
     return 2
   fi
   log "vm.max_map_count already set ($current >= $PREREQS_MAX_MAP_COUNT_MIN)"
@@ -39,7 +39,7 @@ prereqs_check() {
   watches="$(_prereqs_max_user_watches)"
   if [ "$watches" -lt "$PREREQS_MAX_USER_WATCHES_MIN" ]; then
     error "fs.inotify.max_user_watches is $watches, NOVAPI+NovApp's file watchers need headroom above $PREREQS_MAX_USER_WATCHES_MIN"
-    error "Run: sudo sysctl -w fs.inotify.max_user_watches=$PREREQS_MAX_USER_WATCHES_MIN"
+    error "Run: ./novhub-local-stack/setup-host.sh"
     return 2
   fi
   log "fs.inotify.max_user_watches already set ($watches >= $PREREQS_MAX_USER_WATCHES_MIN)"
