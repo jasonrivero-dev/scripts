@@ -38,6 +38,16 @@ Valid components: ${ALL_COMPONENTS[*]}
 ('sync' only does real work under start - it is a one-shot job, not a
 persistent service, so 'stop sync'/'status sync' just say so.)
 
+To bring the stack up manually, one component at a time, in order:
+  start opensearch
+  start novdata
+  start novapi
+  start novapp
+  start plcsim
+  start plcnode
+  start luna          (always prints manual instructions, starts nothing itself)
+Each is identical to running that component's own wrapper script, e.g. ./opensearch.sh start.
+
 LUNA's backend/frontend always print manual instructions - this script never
 starts them (the frontend needs the real desktop display).
 USAGE

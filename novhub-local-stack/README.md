@@ -19,40 +19,70 @@ desktop display, which nothing running non-interactively can check or start.
 | Script | Purpose |
 | --- | --- |
 | `run-novhub.sh` | Main entrypoint — `start`/`stop`/`status`, whole stack or one `[component]` |
-| `opensearch.sh`, `novdata.sh`, `novapi.sh`, `novapp.sh`, `plcsim.sh`, `plcnode.sh`, `luna.sh`, `sync.sh`, `prereqs.sh` | Thin per-component wrappers — `<name>.sh start\|stop\|status`, same effect as `run-novhub.sh start\|stop\|status <name>` (see "Controlling one component" below) |
+| `prereqs.sh` | Pre-flight check — runs automatically before each component command |
+| `opensearch.sh`, `novdata.sh`, `novapi.sh`, `novapp.sh`, `plcsim.sh`, `plcnode.sh`, `luna.sh` | Thin per-component wrappers — `<name>.sh start\|stop\|status`, same effect as `run-novhub.sh start\|stop\|status <name>` |
+| `sync.sh` | One-shot job — run after the stack is up to reflect a new simulated weld |
 | `setup-host.sh` | One-time host sysctl setup (the three kernel limits below) |
 | `reset.sh` | Dev-hygiene: selectively wipe containers/data, or stop just PLCSIM+`plc-node` |
 | `loader.py` | OpenSearch loader — reads NovData's Postgres, posts to `novhub-local` (used by `sync`, never run directly) |
 | `perf-setup.sh` | HUB-106: one-time install of Playwright (owner-run) for browser HAR/trace capture |
-| `perf-seed.sh` | HUB-106: seed/remove a frozen synthetic dataset (10 robots × 2,000 runs, ids 900001-900010) by writing OpenSearch docs directly — superseded by `perf-ingester-load.sh` (below) per the lead dev, kept for the existing variant-A baseline until the owner decides to remove it |
+| `perf-seed.sh` | HUB-106: seed/remove a frozen synthetic dataset (10 robots × 2,000 runs, ids 900001-900010) by writing OpenSearch docs directly |
 | `perf-seed.py` | The actual seed/remove logic `perf-seed.sh` calls — not run directly |
 | `novapi-psql.sh` | Opens `psql` against NovApi's own Postgres (`cloud_db_dev`) — no password needed, runs inside the container |
 | `perf-harness-a.sh` | HUB-106: times variant A (today's per-run call pattern, fired 6 at a time) against the seeded dataset |
 | `perf-harness-a.py` | The actual timing logic `perf-harness-a.sh` calls — not run directly |
 | `perf-ingester-seed.sh` | HUB-106: seed/remove the minimal robot + preset rows `perf-ingester-load.sh` needs (ids 910001+, separate range from `perf-seed.sh`'s) |
 | `perf-ingester-seed.py` | The actual seed/remove logic `perf-ingester-seed.sh` calls — not run directly |
-| `perf-ingester-load.sh` | HUB-106: runs the real `opensearch-ingester` (`~/dev/opensearch-ingester`) in-process over synthetic Hermit V2 payloads — the real path for filling OpenSearch, writes to a separate index so it never touches `perf-seed.sh`'s data |
-| `opensearch-resize-heap.sh` | HUB-106: bumps the local OpenSearch container's JVM heap without losing data (stop, commit, recreate — see below) |
+| `perf-ingester-load.sh` | HUB-106: runs `opensearch-ingester` (`~/dev/opensearch-ingester`) in-process over synthetic Hermit V2 payloads, writing to a separate index so it never touches `perf-seed.sh`'s data |
+| `opensearch-resize-heap.sh` | HUB-106: bumps the local OpenSearch container's JVM heap without losing data (stop, commit, recreate — see the Appendix) |
 | `steps/*.sh` | One file per component (`opensearch`, `novdata`, `novapi`, `novapp`, `plcsim`, `plcnode`, `luna`, `sync`, `prereqs`) — sourced by `run-novhub.sh`/`reset.sh`, not run directly |
 
 Every script meant to be run directly takes `-h`/`--help`.
 
-## Usage
+## The startup sequence
+
+One-time host setup:
 
 ```bash
-./novhub-local-stack/setup-host.sh          # one-time: persist the three kernel limits below
+./novhub-local-stack/setup-host.sh          # persists the three kernel limits below
+```
+
+Bring the stack up manually, one component at a time, in the order it actually needs:
+
+| # | Component | Command | Notes |
+| --- | --- | --- | --- |
+| 0 | Prerequisites | *(automatic — runs before every command below)* | Docker, Node.js/npm, .NET 6 SDK, `git-lfs`, `python3`, `gh`, Docker Compose; the three sysctl limits; `ulimit -n` (raised automatically) |
+| 1 | OpenSearch | `./novhub-local-stack/opensearch.sh start` | Container `os-local`, port `9200`. See the Appendix for manual/recovery detail |
+| 2 | NovData | `./novhub-local-stack/novdata.sh start` | First run prompts for the Postgres superuser password; every run needs `SWR_DB_KEY` (read automatically — see "The four secrets") |
+| 3 | NovApi | `./novhub-local-stack/novapi.sh start` | First run prompts for the robot API key and the NovApp sign-in password |
+| 4 | NovApp | `./novhub-local-stack/novapp.sh start` | Vite dev server, port `5173` |
+| 5 | PLCSIM | `./novhub-local-stack/plcsim.sh start` | Fully automated build + install + start, prompts for `sudo` |
+| 6 | plc-node | `./novhub-local-stack/plcnode.sh start` | Fully automated build + install + start, prompts for `sudo` — see below for `SWR_TYPE` |
+| 7 | LUNA | `./novhub-local-stack/luna.sh start` | Always prints manual instructions — starts nothing itself |
+
+Each line above is identical in effect to `./novhub-local-stack/run-novhub.sh start <component>`.
+`prereqs` runs automatically before each one, every time — nothing to run separately for it.
+
+The whole-stack entrypoint does the same sequence in one call:
+
+```bash
 ./novhub-local-stack/run-novhub.sh start     # bring everything up, in order (prompts for sudo as needed)
 ./novhub-local-stack/run-novhub.sh status    # report every component's state, change nothing
 ./novhub-local-stack/run-novhub.sh stop      # stop everything this script started; keeps data
-./novhub-local-stack/run-novhub.sh start sync  # load the latest weld into OpenSearch, then NovSync
-./novhub-local-stack/reset.sh --all          # dev-hygiene: wipe containers/data for a clean retest
-./novhub-local-stack/reset.sh --plc-stop     # stop just PLCSIM + plc-node, leave the rest running
 ```
 
-Every script has `--help`. `start` stops at the first step that genuinely fails (or at LUNA's
-manual reminder); rerun it once that's done and it continues from there. `status` never stops
-early and never changes anything. `sync` is not part of the whole-stack `start` — run
-`start sync` after each simulated weld to see it reflected in NovApp.
+`start` stops at the first step that genuinely fails (or at LUNA's manual reminder); rerun it
+once that's done and it continues from there. `status` never stops early and never changes
+anything.
+
+Afterward — once the stack is up, each time you want a simulated weld reflected in NovApp:
+
+```bash
+./novhub-local-stack/run-novhub.sh start sync    # or: ./novhub-local-stack/sync.sh start
+```
+
+`sync` is a one-shot job, not a persistent service — it's not part of the sequence above, and
+its own `stop`/`status` just say so and change nothing.
 
 ### Controlling one component
 
@@ -65,29 +95,16 @@ wrapper script that does the same thing standalone — both forms call the exact
 ./novhub-local-stack/opensearch.sh status         # read-only, changes nothing
 ```
 
-Valid components: `opensearch novdata novapi novapp plcsim plcnode luna sync`. `sync` only does
-real work under `start` (it's a one-shot job, not a persistent service — `stop sync`/
-`status sync` just say so and change nothing). `prereqs` isn't one of these — it's a pre-flight
-check that runs automatically before every real `start`/`stop`/`status` call, standalone or not;
-`./novhub-local-stack/prereqs.sh status` runs just that check on its own. See the OpenSearch
-section below for a fully worked example, including recovering from a real failure.
+Valid components: `opensearch novdata novapi novapp plcsim plcnode luna sync`. `prereqs` isn't
+one of these — it's the pre-flight check that runs automatically before every real
+`start`/`stop`/`status` call, standalone or not; `./novhub-local-stack/prereqs.sh status` runs
+just that check on its own.
 
-## Prerequisites
-
-`start`/`status` check these first (`prereqs_check`) and stop if any are missing — standalone
-component scripts and a targeted `run-novhub.sh start|stop|status <component>` check them too,
-every time. All four were found live during testing, not anticipated up front:
-
-- Docker, Node.js/npm, the .NET 6 SDK, `git-lfs`, `python3`, `gh`, Docker Compose
-- Three sysctl kernel limits — `vm.max_map_count >= 262144` (OpenSearch), and two separate
-  `fs.inotify` limits (`max_user_watches >= 524288`, `max_user_instances >= 1024`) that
-  `nodemon`/`vite` both need for their file watchers. `max_user_instances` is the one that
-  actually caused `EMFILE` crashes here — a different kernel limit from `max_user_watches`,
-  and easy to miss. Fix all three at once: `./novhub-local-stack/setup-host.sh` (persists via
-  `/etc/sysctl.d/`, survives reboot, calls `sudo` internally only if needed).
-- Open-file limit (`ulimit -n >= 65536`) — raised automatically by `prereqs_check`, no `sudo`
-  needed; NovData+NOVAPI+NovApp's file watchers together can exceed a typical shell's 1024-fd
-  default.
+`vm.max_map_count >= 262144` (OpenSearch) and two separate `fs.inotify` limits
+(`max_user_watches >= 524288`, `max_user_instances >= 1024`, both needed by `nodemon`/`vite`'s
+file watchers) are the three kernel limits `setup-host.sh` persists via `/etc/sysctl.d/`.
+`max_user_instances` is the one that actually caused `EMFILE` crashes here — a different limit
+from `max_user_watches`, and easy to miss.
 
 ## The four secrets
 
@@ -107,56 +124,82 @@ missing or malformed, the script stops rather than guessing. That file's other e
 credentials, `SWR_DB_KEY` for a different, installed database) are never read, printed, or
 copied anywhere.
 
-## What `stop` does and doesn't do
+## PLCSIM and `plc-node` tag maps
+
+`plc-node` picks its entire PLC tag map from the `SWR_TYPE` env var it's started with — the two
+sets are never merged: unset (the default here) loads the full `mem-map.cfg`/`alarms.cfg`
+(`weld_Mode_Current`, `Estop_Pressed`, etc. — what LUNA needs); `SWR_TYPE=NOVAI` loads the small
+`novai-mem-map.cfg`/`novai-alarms.cfg` instead (`HMI_NovAI_Mode`, etc.). This machine's own
+`/var/opt/novarc/configure` says `SWR_TYPE=NOVAI`, but LUNA's backend/frontend read that file
+directly and independently of what gets passed to `plc-node` — the two don't have to match.
+Override with `PLCNODE_SWR_TYPE=NOVAI ./novhub-local-stack/run-novhub.sh start` if NovAI-mode
+tags are needed instead; doing so brings back "could not find the item" errors for the
+full-map-only tags.
+
+## Stopping and resetting
 
 `stop` (whole stack, no component) stops every component this script started or manages —
 `docker stop` (not `rm`) for OpenSearch/NovData/NOVAPI's Postgres containers, a pidfile-tracked
 process-group kill for NovData/NOVAPI/NovApp's background processes, `sudo systemctl stop` for
 PLCSIM, and `sudo pkill` (as the `novarc` user) for `plc-node` — leaving data and installs
 intact so the next `start` picks up where it left off. It never uninstalls anything, never
-removes a container, and never touches
-LUNA (it never started it). The runbook's full "Cleanup" section (removing containers,
-uninstalling PLCSIM/`plc-node`, deleting NovSync's venv) stays manual — see the runbook directly.
+removes a container, and never touches LUNA (it never started it). The runbook's full "Cleanup"
+section (removing containers, uninstalling PLCSIM/`plc-node`, deleting NovSync's venv) stays
+manual — see the runbook directly.
 
 For dev-hygiene resets between test runs (wiping a container's data entirely, not just stopping
 it, or stopping just PLCSIM+`plc-node`), use `./novhub-local-stack/reset.sh` — see its own
 `--help`.
 
-## PLCSIM and `plc-node`: what `start` actually does
+## HUB-106 perf-testing tools
 
-Both are fully automated — `start` builds, installs, configures, and starts them for real,
-prompting for `sudo` directly in your terminal only when needed:
+```bash
+./novhub-local-stack/perf-setup.sh          # one-time: install Playwright (prompts for sudo on the Chromium/apt step)
+./novhub-local-stack/perf-seed.sh seed      # create the frozen synthetic dataset (10 robots x 2,000 runs)
+./novhub-local-stack/perf-seed.sh remove    # delete exactly what seed created, nothing else
+./novhub-local-stack/novapi-psql.sh -c "select count(*) from weld_test_reports;"   # one-shot query, no password
+./novhub-local-stack/novapi-psql.sh         # interactive psql prompt, no password
+./novhub-local-stack/perf-harness-a.sh      # time variant A (today's per-run calls) against the seeded data
+```
 
-- **PLCSIM**: build the `.deb` (`git lfs pull && ./build.sh`, no `sudo`) → `sudo apt install` it
-  → move its REST port to `127.0.0.1:8081` (a scripted `sed`, not interactive editing — the
-  service won't start at all without this) → `sudo systemctl enable --now plc-simulator`.
-- **`plc-node`**: build the `.deb` (`deps`/`generate`/`build`/`sudo chown`/`package.sh` — the
-  runbook's own one-liner shortcut doesn't actually work, confirmed) → `sudo apt install` it →
-  point its config at PLCSIM (`sudo sed`, re-applied automatically if a later reinstall reverts
-  it) → `sudo install -d` its log directory → start it as the `novarc` user in the background.
+`perf-seed.sh seed` writes directly to OpenSearch and NovApi's own Postgres — never through
+LUNA/PLCSIM/plc-node or NovData — so it needs OpenSearch and NovApi's own `docker compose`
+stack running first, not the whole local stack. Everything it creates is tagged (a reserved
+robot-id range, one synthetic group/user) so `remove` can undo it cleanly; it's idempotent,
+re-running `seed` on an already-seeded stack just prints `already seeded`. The synthetic test
+user's login is written to `.state/secrets/perf-test-user.secret` (0600, in a 0700 directory) —
+never printed twice, never logged elsewhere.
 
-  `plc-node` picks its entire PLC tag map from the `SWR_TYPE` env var it's started with — the two
-  sets are never merged: unset (the default here) loads the full `mem-map.cfg`/`alarms.cfg`
-  (`weld_Mode_Current`, `Estop_Pressed`, etc. — what LUNA needs); `SWR_TYPE=NOVAI` loads the small
-  `novai-mem-map.cfg`/`novai-alarms.cfg` instead (`HMI_NovAI_Mode`, etc.). This machine's own
-  `/var/opt/novarc/configure` says `SWR_TYPE=NOVAI`, but LUNA's backend/frontend read that file
-  directly and independently of what we pass to `plc-node` — the two don't have to match. Override
-  with `PLCNODE_SWR_TYPE=NOVAI ./novhub-local-stack/run-novhub.sh start` if NovAI-mode tags are
-  needed instead; doing so will bring back "could not find the item" errors for the full-map-only
-  tags.
+`perf-seed.sh` writes OpenSearch docs by hand, in a shape that doesn't match production (no
+`robot_type`, no preset-matching). `opensearch-ingester`
+(`~/dev/opensearch-ingester`, `github.com/Novarc-Software/opensearch-ingester`) is the
+production ingestion path, usable locally the same way:
 
-## OpenSearch: starting, checking, and recovering it by hand
+```bash
+./novhub-local-stack/perf-ingester-seed.sh seed        # robot + matching preset rows (ids 910001+)
+./novhub-local-stack/perf-ingester-load.sh \            # generate + ingest synthetic Hermit V2 runs
+  -template /path/to/a/real/Hermit_V2_sample.json \     # read-only - never copy a real sample into a repo
+  -robot-id-start 910001 -robot-count 2 -runs-per-robot 10 -points-per-run 10
+./novhub-local-stack/perf-ingester-seed.sh remove       # undo exactly what seed created
+```
 
-`./run-novhub.sh start`/`status` bring OpenSearch up automatically (whole stack or
-`start opensearch`/`status opensearch` alone) by calling `opensearch_up`/`opensearch_check` in
-[`steps/opensearch.sh`](steps/opensearch.sh) — that file is the single source of truth for the
-container name, port, image, index name, and default heap (`OPENSEARCH_CONTAINER`,
-`OPENSEARCH_PORT`, `OPENSEARCH_IMAGE`, `OPENSEARCH_INDEX`, `OPENSEARCH_HEAP`, all overridable by
-env var of the same name). `steps/opensearch.sh` itself is sourced, not run directly — use
-`./novhub-local-stack/opensearch.sh start|stop|status` for the standalone equivalent (see
-"Controlling one component" above). The manual commands below are the same operations, written
-out by hand for when you want to do this yourself, or verify/recover without going through
-either script.
+`perf-ingester-load.sh` builds synthetic Hermit V2 JSON payloads using a real sample file as the
+structural template (`-template`, required: real schema/field order, real `weld_summary` keys,
+real value-row patterns cycled for variation) and feeds them through the ingester's own
+`RouteAndProcess` in-process (see `~/dev/opensearch-ingester/cmd/perfload`). The template file
+is only ever read, never copied or committed anywhere. Writes to `ES_INDEX` (default
+`novhub-local-ingester`, separate from `perf-seed.sh`'s `novhub-local`, so the two never
+collide) and needs NovApi's own Postgres and the local OpenSearch container up first. Point
+NovApi at either index via its own `OPENSEARCH_INDEX` env var.
+
+## Appendix: OpenSearch manual operations
+
+Hand-run equivalents of what `opensearch.sh`/`steps/opensearch.sh` do automatically — use this
+when you want to do it yourself, or to verify/recover without going through either script.
+[`steps/opensearch.sh`](steps/opensearch.sh) is the single source of truth for the container
+name, port, image, index name, and default heap (`OPENSEARCH_CONTAINER`, `OPENSEARCH_PORT`,
+`OPENSEARCH_IMAGE`, `OPENSEARCH_INDEX`, `OPENSEARCH_HEAP`, all overridable by env var of the
+same name).
 
 The container is `os-local`, port `127.0.0.1:9200`. It has **no data volume** — its index data
 lives only in the container's own writable layer. That one fact drives every procedure below:
@@ -313,58 +356,3 @@ be removed from a throwaway container before OpenSearch will start from that ima
 6. Clean up stray images once you've confirmed the new container is healthy and has the right
    data: `docker images --filter reference='os-local-preheap*'` to list them,
    `docker rmi <repo:tag>` for any you no longer need as a rollback point.
-
-## HUB-106 perf-testing tools
-
-```bash
-./novhub-local-stack/perf-setup.sh          # one-time: install Playwright (prompts for sudo on the Chromium/apt step)
-./novhub-local-stack/perf-seed.sh seed      # create the frozen synthetic dataset (10 robots x 2,000 runs)
-./novhub-local-stack/perf-seed.sh remove    # delete exactly what seed created, nothing else
-./novhub-local-stack/novapi-psql.sh -c "select count(*) from weld_test_reports;"   # one-shot query, no password
-./novhub-local-stack/novapi-psql.sh         # interactive psql prompt, no password
-./novhub-local-stack/perf-harness-a.sh      # time variant A (today's per-run calls) against the seeded data
-```
-
-`perf-seed.sh seed` writes directly to OpenSearch and NovApi's own Postgres — never through
-LUNA/PLCSIM/plc-node or NovData — so it needs `run-novhub.sh start`'s OpenSearch container and
-NovApi's own `docker compose` stack running first, not the whole local stack. Everything it
-creates is tagged (a reserved robot-id range, one synthetic group/user) so `remove` can undo it
-cleanly; it's idempotent, re-running `seed` on an already-seeded stack just prints
-`already seeded`. The synthetic test user's login is written to
-`.state/secrets/perf-test-user.secret` (0600, in a 0700 directory) — never printed twice, never
-logged elsewhere.
-
-### The real path: `opensearch-ingester`
-
-`perf-seed.sh` writes OpenSearch docs by hand, in a shape that doesn't match production (no
-`robot_type`, and it never exercises the real preset-matching logic). The real local path uses
-`~/dev/opensearch-ingester` (`github.com/Novarc-Software/opensearch-ingester`) itself:
-
-```bash
-./novhub-local-stack/perf-ingester-seed.sh seed        # robot + matching preset rows (ids 910001+)
-./novhub-local-stack/perf-ingester-load.sh \            # generate + ingest synthetic Hermit V2 runs
-  -template /path/to/a/real/Hermit_V2_sample.json \     # read-only - never copy a real sample into a repo
-  -robot-id-start 910001 -robot-count 2 -runs-per-robot 10 -points-per-run 10
-./novhub-local-stack/perf-ingester-seed.sh remove       # undo exactly what seed created
-```
-
-`perf-ingester-load.sh` builds synthetic Hermit V2 JSON payloads - using a real sample file as
-the structural template (`-template`, required: real schema/field order, real `weld_summary`
-keys, real value-row patterns cycled for variation) - and feeds them through the ingester's own
-`RouteAndProcess` in-process (see `~/dev/opensearch-ingester/cmd/perfload`) — real doc shapes,
-real preset-matching/association code, no hand-written OpenSearch docs. The template file is
-only ever read, never copied or committed anywhere. It writes to `ES_INDEX` (default
-`novhub-local-ingester`, a separate index from `perf-seed.sh`'s `novhub-local`, so the two never
-collide) and needs NovApi's own Postgres and the local OpenSearch container up first. Point
-NovApi at either index via its own `OPENSEARCH_INDEX` env var.
-
-## Manual steps (LUNA only)
-
-LUNA's frontend needs the real desktop display, which nothing running non-interactively can
-check or start — `start`/`status` always print the reminder:
-
-- Start the backend (T5, `run-luna.sh backend`) and confirm the frontend window is open (T6,
-  `run-luna.sh frontend`, needs the real desktop display).
-
-See `~/dev/presentations/novhub-local-stack/NOVHUB_LOCAL_RUNBOOK.md` for the full procedure
-these steps are drawn from, including starting a simulated weld and the closing validation.
