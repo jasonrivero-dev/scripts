@@ -69,7 +69,7 @@ novapi_up() {
     log "created: .env from .env.sample"
   fi
   ensure_env_kv .env OPENSEARCH_HOST "http://localhost:9200"
-  ensure_env_kv .env OPENSEARCH_INDEX "novhub-local"
+  ensure_env_kv .env OPENSEARCH_INDEX "${OPENSEARCH_INDEX:-novhub-local-ingester}"
   ensure_env_kv .env IS_NOVAI "true"
   ensure_env_kv .env DB_USERNAME "postgres"
   ensure_env_kv .env DB_PASSWORD "postgres"
