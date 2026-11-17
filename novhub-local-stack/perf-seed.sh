@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
   cat <<USAGE
-Usage: perf-seed.sh [seed|remove]
+Usage: perf-seed.sh [seed|remove|remove-data]
 
 HUB-106: seed (or remove) a frozen synthetic dataset for NovApi/NovApp perf
 testing - 10 synthetic robots (ids 900001-900010) x 2,000 runs = 20,000 runs,
@@ -11,8 +11,12 @@ one synthetic test user, one synthetic group. Writes directly to NovApi's own
 Postgres (cloud_db_dev) and the local OpenSearch index - never through
 LUNA/PLCSIM/plc-node or NovData.
 
-  seed    create the dataset (no-op, prints "already seeded", if it exists)
-  remove  delete exactly the tagged rows/docs this created (no-op if absent)
+  seed         create the dataset (no-op, prints "already seeded", if it exists)
+  remove       delete every tagged row/doc this created (no-op if absent)
+  remove-data  delete only the OpenSearch docs + weld_presets_associations -
+               keeps robot/user/group/weld_monitoring_presets/weld_test_reports,
+               which the real opensearch-ingester path (perf-ingester-load.sh)
+               reuses instead of recreating
 
 Needs NovApi's docker compose stack and the local OpenSearch container up
 (./novhub-local-stack/run-novhub.sh up).

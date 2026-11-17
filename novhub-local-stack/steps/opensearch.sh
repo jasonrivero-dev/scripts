@@ -2,6 +2,7 @@ OPENSEARCH_CONTAINER="os-local"
 OPENSEARCH_PORT=9200
 OPENSEARCH_INDEX="novhub-local"
 OPENSEARCH_IMAGE="opensearchproject/opensearch:2.19.0"
+OPENSEARCH_HEAP="${OPENSEARCH_HEAP:-4g}"
 
 opensearch_check() {
   if container_running "$OPENSEARCH_CONTAINER"; then
@@ -29,7 +30,7 @@ opensearch_up() {
   else
     docker run -d --name "$OPENSEARCH_CONTAINER" -p "127.0.0.1:${OPENSEARCH_PORT}:9200" \
       -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true \
-      -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" \
+      -e OPENSEARCH_JAVA_OPTS="-Xms${OPENSEARCH_HEAP} -Xmx${OPENSEARCH_HEAP}" \
       "$OPENSEARCH_IMAGE" >/dev/null
     log "created: $OPENSEARCH_CONTAINER"
   fi

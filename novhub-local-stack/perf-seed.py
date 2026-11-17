@@ -293,6 +293,37 @@ def seed():
         conn.close()
 
 
+def remove_data():
+    """Removes exactly the hand-written OpenSearch docs + weld_presets_associations rows -
+    keeps robot/user/group/weld_monitoring_presets/weld_test_reports, which the real
+    opensearch-ingester path reuses (per the owner's HUB-106 decision)."""
+    conn = connect()
+    conn.autocommit = False
+    try:
+        with conn.cursor() as cur:
+            ids = tuple(robot_ids())
+            cur.execute("DELETE FROM weld_presets_associations WHERE robot_id IN %s", (ids,))
+            assoc_deleted = cur.rowcount
+        conn.commit()
+
+        min_id, max_id = min(robot_ids()), max(robot_ids())
+        del_query = {"query": {"range": {"robot.robot_id": {"gte": min_id, "lte": max_id}}}}
+        resp = requests.post(
+            f"{OPENSEARCH_URL}/{OPENSEARCH_INDEX}/_delete_by_query",
+            data=json.dumps(del_query), headers={"Content-Type": "application/json"}, timeout=120,
+        )
+        resp.raise_for_status()
+        deleted_docs = resp.json().get("deleted", 0)
+        print(f"removed: {deleted_docs} OpenSearch documents, {assoc_deleted} weld_presets_associations rows")
+        print(f"kept: {ROBOT_COUNT} robots ({min_id}-{max_id}), 1 user, 1 group, "
+              f"{ROBOT_COUNT} weld_monitoring_presets rows, weld_test_reports rows (not touched)")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def remove():
     conn = connect()
     conn.autocommit = False
@@ -347,9 +378,11 @@ def remove():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["seed", "remove"])
+    parser.add_argument("action", choices=["seed", "remove", "remove-data"])
     args = parser.parse_args()
     if args.action == "seed":
         seed()
+    elif args.action == "remove-data":
+        remove_data()
     else:
         remove()
