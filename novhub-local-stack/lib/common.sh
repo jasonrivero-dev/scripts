@@ -6,6 +6,10 @@ NOVHUB_ROOT="$(cd "$NOVHUB_LIB_DIR/.." && pwd)"
 STATE_DIR="${NOVHUB_STATE_DIR:-$NOVHUB_ROOT/.state}"
 mkdir -p "$STATE_DIR"
 
+# component_dispatch() needs prereqs_check - source it here so every caller of this file gets
+# it for free, instead of each one sourcing steps/prereqs.sh separately.
+source "$NOVHUB_ROOT/steps/prereqs.sh"
+
 have_container() {
   docker ps -a --format '{{.Names}}' | grep -qx "$1"
 }
@@ -133,5 +137,33 @@ read_identity() {
   if [ "$SWR_ID" != "NovAI-${SWR_NUMBER}" ]; then
     error "Robot identity file's SWR_ID ($SWR_ID) does not match expected NovAI-$SWR_NUMBER"
     exit 1
+  fi
+}
+
+component_dispatch() {
+  local name="$1" verb="${2:-}"
+  if [ -z "$verb" ] || [ "$verb" = "-h" ] || [ "$verb" = "--help" ]; then
+    cat <<USAGE
+Usage: $name.sh start|stop|status
+
+Standalone entry point for the $name component - identical to what
+run-novhub.sh start|stop|status $name calls. Idempotent: an
+already-correct state prints "already ..." and changes nothing. If $name
+has no stop/status of its own, running one here says so and does nothing.
+USAGE
+    return 0
+  fi
+  prereqs_check || return $?
+  local fn
+  case "$verb" in
+    start)  fn="${name}_up" ;;
+    stop)   fn="${name}_down" ;;
+    status) fn="${name}_check" ;;
+    *) error "Unknown action: $verb (expected start|stop|status)"; return 1 ;;
+  esac
+  if declare -f "$fn" >/dev/null; then
+    "$fn"
+  else
+    log "$name has no persistent state to $verb - nothing to do"
   fi
 }
