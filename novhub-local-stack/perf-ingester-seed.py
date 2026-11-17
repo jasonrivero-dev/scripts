@@ -19,6 +19,10 @@ NOVAPI_PORT = os.environ.get("NOVAPI_DB_PORT", "5433")
 NOVAPI_DB = os.environ.get("NOVAPI_DB_NAME", "swrdb_aggr")
 NOVAPI_USER = os.environ.get("NOVAPI_DB_USER", "postgres")
 NOVAPI_PASSWORD = os.environ.get("NOVAPI_DB_PASSWORD")
+PERF_SECRET_FILE = os.environ.get(
+    "PERF_SECRET_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".state", "secrets", "perf-test-user.secret"),
+)
 
 # Must equal cmd/perfload's matchCriteria exactly, or FindBestPreset scores 0 and no
 # weld_presets_associations row gets written.
@@ -72,6 +76,8 @@ def remove():
     try:
         with conn.cursor() as cur:
             ids = tuple(robot_ids())
+            cur.execute("DELETE FROM weld_test_reports WHERE robot_id IN %s", (ids,))
+            reports = cur.rowcount
             cur.execute("DELETE FROM weld_presets_associations WHERE robot_id IN %s", (ids,))
             assoc = cur.rowcount
             cur.execute("DELETE FROM weld_monitoring_presets WHERE robot_id IN %s", (ids,))
@@ -81,7 +87,68 @@ def remove():
         if robots == 0:
             print("already removed: nothing found")
         else:
-            print(f"removed: {robots} robots, {assoc} weld_presets_associations rows")
+            print(f"removed: {robots} robots, {assoc} weld_presets_associations rows, "
+                  f"{reports} weld_test_reports rows")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def perf_test_user_email():
+    with open(PERF_SECRET_FILE) as f:
+        email, _ = f.read().strip().split(":", 1)
+    return email
+
+
+def seed_reports():
+    """Creates weld_test_reports rows for every run already in weld_presets_associations -
+    NovApi's weld_test_reports(/batch) endpoints need one per run to return anything.
+    part_id/serial_id/weld_id are re-derived with the exact formula cmd/perfload uses, so they
+    match what's actually in OpenSearch for these runs."""
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email = %s", (perf_test_user_email(),))
+            row = cur.fetchone()
+            if row is None:
+                sys.exit(f"no user found for {perf_test_user_email()} - run perf-seed.sh seed first")
+            user_id = row[0]
+
+            ids = tuple(robot_ids())
+            cur.execute(
+                "SELECT DISTINCT robot_id, run_id FROM weld_presets_associations WHERE robot_id IN %s",
+                (ids,),
+            )
+            runs = cur.fetchall()
+            if not runs:
+                print("nothing to seed: no weld_presets_associations rows for these robots yet - "
+                      "run perf-ingester-load.sh first")
+                return
+
+            created = 0
+            for robot_id, run_id in runs:
+                cur.execute(
+                    "SELECT 1 FROM weld_test_reports WHERE robot_id = %s AND run_number = %s",
+                    (robot_id, run_id),
+                )
+                if cur.fetchone() is not None:
+                    continue
+                weld_id = str(run_id % 5 + 1)
+                cur.execute(
+                    "INSERT INTO weld_test_reports "
+                    "(user_id, robot_id, work_order_ref, spool_ref, welder_id_ref, run_number, test_status) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (user_id, robot_id, f"PERF-ING-PART-{run_id}", f"PERF-ING-SER-{run_id}",
+                     weld_id, run_id, "pass"),
+                )
+                created += 1
+        conn.commit()
+        if created == 0:
+            print("already seeded: weld_test_reports rows exist for every run")
+        else:
+            print(f"created: {created} weld_test_reports rows")
     except Exception:
         conn.rollback()
         raise
@@ -91,6 +158,6 @@ def remove():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["seed", "remove"])
+    parser.add_argument("action", choices=["seed", "remove", "seed-reports"])
     args = parser.parse_args()
-    seed() if args.action == "seed" else remove()
+    {"seed": seed, "remove": remove, "seed-reports": seed_reports}[args.action]()

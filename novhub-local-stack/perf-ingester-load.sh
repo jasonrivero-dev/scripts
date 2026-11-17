@@ -23,6 +23,13 @@ passed through to the Go program, e.g.:
 
 Env overrides: ES_HOST (default http://127.0.0.1:9200), ES_INDEX (default
 novhub-local-ingester), NOVAPI_REPO (for the Postgres password lookup).
+
+By default the generator adds "robot_id" alongside "id" in each payload's
+robot object - a generator-only workaround (cmd/perfload/main.go,
+includeRobotID) for a ComputeWSID gap where the real sample file's "id"/
+"model" shape makes the ingester's weld_hash silently drop robot_id, so it
+never matches what NovApi recomputes from the stored doc. Pass
+-include-robot-id=false to reproduce that gap instead.
 USAGE
   exit 0
 fi

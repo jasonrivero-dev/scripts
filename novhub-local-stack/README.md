@@ -54,7 +54,7 @@ Bring the stack up manually, one component at a time, in the order it actually n
 | 0 | Prerequisites | *(automatic — runs before every command below)* | Docker, Node.js/npm, .NET 6 SDK, `git-lfs`, `python3`, `gh`, Docker Compose; the three sysctl limits; `ulimit -n` (raised automatically) |
 | 1 | OpenSearch | `./novhub-local-stack/opensearch.sh start` | Container `os-local`, port `9200`. See the Appendix for manual/recovery detail |
 | 2 | NovData | `./novhub-local-stack/novdata.sh start` | First run prompts for the Postgres superuser password; every run needs `SWR_DB_KEY` (read automatically — see "The four secrets") |
-| 3 | NovApi | `./novhub-local-stack/novapi.sh start` | First run prompts for the robot API key and the NovApp sign-in password |
+| 3 | NovApi | `./novhub-local-stack/novapi.sh start` | First run prompts for the robot API key and the NovApp sign-in password. Also brings up a local MinIO container (S3 mock for attachment listing) and points NovApi's `.env` at it - no manual step |
 | 4 | NovApp | `./novhub-local-stack/novapp.sh start` | Vite dev server, port `5173` |
 | 5 | PLCSIM | `./novhub-local-stack/plcsim.sh start` | Fully automated build + install + start, prompts for `sudo` |
 | 6 | plc-node | `./novhub-local-stack/plcnode.sh start` | Fully automated build + install + start, prompts for `sudo` — see below for `SWR_TYPE` |
@@ -191,6 +191,17 @@ is only ever read, never copied or committed anywhere. Writes to `ES_INDEX` (def
 `novhub-local-ingester`, separate from `perf-seed.sh`'s `novhub-local`, so the two never
 collide) and needs NovApi's own Postgres and the local OpenSearch container up first. Point
 NovApi at either index via its own `OPENSEARCH_INDEX` env var.
+
+**Known gap, worked around by default:** the real sample file's `robot` object is shaped
+`{"id":..., "model":...}`. The ingester's `ComputeWSID` (used to match `weld_presets_associations`
+rows) only reads a `robot_id` key, not `id` — so with that real shape it silently drops `robot_id`
+from the hash, and the association it writes never matches what NovApi recomputes from the
+stored OpenSearch doc (which does carry `robot_id`, written by a different code path). By default
+the generator adds `robot_id` alongside `id` in the payload (`cmd/perfload/main.go`,
+`includeRobotID`) — a generator-only workaround, no `opensearch-ingester` code changed. Pass
+`-include-robot-id=false` to reproduce the real gap. Whether real production payloads actually
+use this `id`/`model` shape (vs. the ingester's own test fixtures, which use `robot_id`/
+`robot_type`) is unconfirmed as of 2026-11-17 — owner decision pending via COORDINATOR.
 
 ## Appendix: OpenSearch manual operations
 

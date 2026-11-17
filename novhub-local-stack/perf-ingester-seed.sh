@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
   cat <<USAGE
-Usage: perf-ingester-seed.sh [seed|remove]
+Usage: perf-ingester-seed.sh [seed|remove|seed-reports]
 
 HUB-106: seed (or remove) the minimal NovApi Postgres rows opensearch-ingester
 needs - 2 synthetic robots (ids 910001-910002, overridable: PERF_ING_ROBOT_ID_START,
@@ -11,8 +11,11 @@ PERF_ING_ROBOT_COUNT) + one matching weld_monitoring_presets row each. Does NOT
 write OpenSearch docs or weld_presets_associations - run perf-ingester-load.sh
 for that, which exercises the ingester's own preset-matching code.
 
-  seed    create the rows (no-op, prints "already seeded", if present)
-  remove  delete exactly those rows plus any associations the ingester wrote
+  seed          create the rows (no-op, prints "already seeded", if present)
+  remove        delete those rows plus associations and weld_test_reports
+  seed-reports  create one weld_test_reports row per run already associated
+                (needed for NovApi's weld_test_reports(/batch) endpoints to
+                return anything) - run this after perf-ingester-load.sh
 USAGE
   exit 0
 fi

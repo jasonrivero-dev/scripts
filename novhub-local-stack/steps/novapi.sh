@@ -1,4 +1,6 @@
 NOVAPI_REPO="${NOVAPI_REPO:-$HOME/dev/NovApi}"
+NOVAPI_STEPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$NOVAPI_STEPS_DIR/minio.sh"
 NOVAPI_DB_SERVICE="db_cloud_dev"
 NOVAPI_DB_CONTAINER="cloud_db_dev"
 NOVAPI_DB_USER="postgres"
@@ -121,7 +123,12 @@ SQL
     log "created: robot, key, group, role and user seeded"
   fi
 
-  start_background novapi bash -c "cd \"$NOVAPI_REPO\" && npm install && exec npm run dev"
+  minio_up || return 1
+
+  # dotenv never overrides a var already set in the process env - an ambient real
+  # AWS_ACCESS_KEY_ID/etc from the shell's own profile would silently beat .env's MinIO ones.
+  start_background novapi env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+    bash -c "cd \"$NOVAPI_REPO\" && npm install && exec npm run dev"
 
   wait_for_port novapi "$NOVAPI_PORT" || return 1
 

@@ -5,19 +5,25 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   cat <<USAGE
 Usage: perf-harness-a.sh
 
-HUB-106 variant A baseline: times today's per-run call pattern (one weld_run
-list call, then one weld_test_reports call per returned row, fired 6 at a
-time via Promise.all - today's real code path, capped by the browser's
-HTTP/1.1 per-host connection limit) against the synthetic dataset
-perf-seed.sh created. A sequential variant is also printed for context only
-- it is not what the real page does. Read-only against NovApi - no code
-changes. Logs in as the seeded synthetic test user automatically.
+HUB-106 endpoint baseline: times the five endpoints relevant to the Analytics
+page, against the real ingested robots (perf-ingester-load.sh's output):
+  a) GET  weld_run                - the page's run list
+  b) GET  weld_test_reports x N   - one per run, fired PERF_PARALLEL_CONCURRENCY
+                                     at a time (today's real per-run pattern)
+  c) POST weld_test_reports/batch - PERF_BATCH_SIZE runs per call
+  d) POST weld_stats/batch        - PERF_BATCH_SIZE run_ids per call
+  e) GET  weld_stats               - one page-wide call
+Read-only against NovApi - no code changes. Logs in as the seeded synthetic
+test user automatically. Every run's full result, plus the slice of NovApi's
+own per-request log covering it, is saved under .state/perf-results/<UTC
+timestamp>/ so results can be kept and compared before/after.
 
-Env overrides: PERF_ROBOT_ID (default 900001), PERF_PER_PAGE (default 2000),
-PERF_TRIALS (default 3, trial 1 counts as cold, the rest as warm).
+Env overrides: PERF_ROBOT_IDS (default 910001,910002), PERF_PER_PAGE (2000),
+PERF_TRIALS (3), PERF_PARALLEL_CONCURRENCY (6), PERF_BATCH_SIZE (500),
+PERF_STATS_RANGE_DAYS (60, for the page-wide call's date range).
 
 Needs run-novhub.sh up's OpenSearch container, NovApi's own docker compose
-stack running, and perf-seed.sh seed already run.
+stack running, and perf-ingester-seed.sh seed + seed-reports already run.
 USAGE
   exit 0
 fi
