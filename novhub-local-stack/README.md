@@ -8,7 +8,7 @@ PLCSIM) — in the order the stack actually needs, idempotently. Replaces hand-w
 Not a standalone application: it orchestrates seven other checkouts
 (`~/dev/NovApi`, `~/dev/NovData`, `~/dev/NovSync`, `~/dev/novhub`, `~/dev/plc_simulator`,
 `~/dev/plc-node`, and this repo's own `luna/run-luna.sh`) plus Docker and the robot's own
-`/var/opt/novarc/configure`. `up` builds, installs, configures, and starts everything it can —
+`/var/opt/novarc/configure`. `start` builds, installs, configures, and starts everything it can —
 including PLCSIM and `plc-node` (real builds, real `apt install`, real service starts). Any
 `sudo` call happens inside the script itself: it prompts you directly, in your own terminal,
 only when something actually needs it. Only LUNA stays manual — its frontend needs the real
@@ -18,7 +18,8 @@ desktop display, which nothing running non-interactively can check or start.
 
 | Script | Purpose |
 | --- | --- |
-| `run-novhub.sh` | Main entrypoint — `up`/`status`/`down`/`sync` the whole stack |
+| `run-novhub.sh` | Main entrypoint — `start`/`stop`/`status`, whole stack or one `[component]` |
+| `opensearch.sh`, `novdata.sh`, `novapi.sh`, `novapp.sh`, `plcsim.sh`, `plcnode.sh`, `luna.sh`, `sync.sh`, `prereqs.sh` | Thin per-component wrappers — `<name>.sh start\|stop\|status`, same effect as `run-novhub.sh start\|stop\|status <name>` (see "Controlling one component" below) |
 | `setup-host.sh` | One-time host sysctl setup (the three kernel limits below) |
 | `reset.sh` | Dev-hygiene: selectively wipe containers/data, or stop just PLCSIM+`plc-node` |
 | `loader.py` | OpenSearch loader — reads NovData's Postgres, posts to `novhub-local` (used by `sync`, never run directly) |
@@ -40,23 +41,42 @@ Every script meant to be run directly takes `-h`/`--help`.
 
 ```bash
 ./novhub-local-stack/setup-host.sh          # one-time: persist the three kernel limits below
-./novhub-local-stack/run-novhub.sh up        # bring everything up, in order (prompts for sudo as needed)
+./novhub-local-stack/run-novhub.sh start     # bring everything up, in order (prompts for sudo as needed)
 ./novhub-local-stack/run-novhub.sh status    # report every component's state, change nothing
-./novhub-local-stack/run-novhub.sh down      # stop everything this script started; keeps data
-./novhub-local-stack/run-novhub.sh sync      # load the latest weld into OpenSearch, then NovSync
+./novhub-local-stack/run-novhub.sh stop      # stop everything this script started; keeps data
+./novhub-local-stack/run-novhub.sh start sync  # load the latest weld into OpenSearch, then NovSync
 ./novhub-local-stack/reset.sh --all          # dev-hygiene: wipe containers/data for a clean retest
 ./novhub-local-stack/reset.sh --plc-stop     # stop just PLCSIM + plc-node, leave the rest running
 ```
 
-Every script has `--help`. `up` stops at the first step that genuinely fails (or at LUNA's
+Every script has `--help`. `start` stops at the first step that genuinely fails (or at LUNA's
 manual reminder); rerun it once that's done and it continues from there. `status` never stops
-early and never changes anything. `sync` is not part of `up` — run it after each simulated weld
-to see it reflected in NovApp.
+early and never changes anything. `sync` is not part of the whole-stack `start` — run
+`start sync` after each simulated weld to see it reflected in NovApp.
+
+### Controlling one component
+
+Every component also takes a `[component]` argument on `run-novhub.sh`, or has its own thin
+wrapper script that does the same thing standalone — both forms call the exact same code:
+
+```bash
+./novhub-local-stack/run-novhub.sh start novapi   # only NovApi (+ its own Postgres) changes state
+./novhub-local-stack/novapi.sh start              # identical - standalone, no run-novhub.sh needed
+./novhub-local-stack/opensearch.sh status         # read-only, changes nothing
+```
+
+Valid components: `opensearch novdata novapi novapp plcsim plcnode luna sync`. `sync` only does
+real work under `start` (it's a one-shot job, not a persistent service — `stop sync`/
+`status sync` just say so and change nothing). `prereqs` isn't one of these — it's a pre-flight
+check that runs automatically before every real `start`/`stop`/`status` call, standalone or not;
+`./novhub-local-stack/prereqs.sh status` runs just that check on its own. See the OpenSearch
+section below for a fully worked example, including recovering from a real failure.
 
 ## Prerequisites
 
-`up`/`status` check these first (`prereqs_check`) and stop if any are missing. All four were
-found live during testing, not anticipated up front:
+`start`/`status` check these first (`prereqs_check`) and stop if any are missing — standalone
+component scripts and a targeted `run-novhub.sh start|stop|status <component>` check them too,
+every time. All four were found live during testing, not anticipated up front:
 
 - Docker, Node.js/npm, the .NET 6 SDK, `git-lfs`, `python3`, `gh`, Docker Compose
 - Three sysctl kernel limits — `vm.max_map_count >= 262144` (OpenSearch), and two separate
@@ -87,13 +107,14 @@ missing or malformed, the script stops rather than guessing. That file's other e
 credentials, `SWR_DB_KEY` for a different, installed database) are never read, printed, or
 copied anywhere.
 
-## What `down` does and doesn't do
+## What `stop` does and doesn't do
 
-`down` stops every component this script started or manages — `docker stop` (not `rm`) for
-OpenSearch/NovData/NOVAPI's Postgres containers, a pidfile-tracked process-group kill for
-NovData/NOVAPI/NovApp's background processes, `sudo systemctl stop` for PLCSIM, and `sudo pkill`
-(as the `novarc` user) for `plc-node` — leaving data and installs intact so the next `up` picks
-up where it left off. It never uninstalls anything, never removes a container, and never touches
+`stop` (whole stack, no component) stops every component this script started or manages —
+`docker stop` (not `rm`) for OpenSearch/NovData/NOVAPI's Postgres containers, a pidfile-tracked
+process-group kill for NovData/NOVAPI/NovApp's background processes, `sudo systemctl stop` for
+PLCSIM, and `sudo pkill` (as the `novarc` user) for `plc-node` — leaving data and installs
+intact so the next `start` picks up where it left off. It never uninstalls anything, never
+removes a container, and never touches
 LUNA (it never started it). The runbook's full "Cleanup" section (removing containers,
 uninstalling PLCSIM/`plc-node`, deleting NovSync's venv) stays manual — see the runbook directly.
 
@@ -101,9 +122,9 @@ For dev-hygiene resets between test runs (wiping a container's data entirely, no
 it, or stopping just PLCSIM+`plc-node`), use `./novhub-local-stack/reset.sh` — see its own
 `--help`.
 
-## PLCSIM and `plc-node`: what `up` actually does
+## PLCSIM and `plc-node`: what `start` actually does
 
-Both are fully automated — `up` builds, installs, configures, and starts them for real,
+Both are fully automated — `start` builds, installs, configures, and starts them for real,
 prompting for `sudo` directly in your terminal only when needed:
 
 - **PLCSIM**: build the `.deb` (`git lfs pull && ./build.sh`, no `sudo`) → `sudo apt install` it
@@ -120,19 +141,22 @@ prompting for `sudo` directly in your terminal only when needed:
   `novai-mem-map.cfg`/`novai-alarms.cfg` instead (`HMI_NovAI_Mode`, etc.). This machine's own
   `/var/opt/novarc/configure` says `SWR_TYPE=NOVAI`, but LUNA's backend/frontend read that file
   directly and independently of what we pass to `plc-node` — the two don't have to match. Override
-  with `PLCNODE_SWR_TYPE=NOVAI ./novhub-local-stack/run-novhub.sh up` if NovAI-mode tags are needed
-  instead; doing so will bring back "could not find the item" errors for the full-map-only tags.
+  with `PLCNODE_SWR_TYPE=NOVAI ./novhub-local-stack/run-novhub.sh start` if NovAI-mode tags are
+  needed instead; doing so will bring back "could not find the item" errors for the full-map-only
+  tags.
 
 ## OpenSearch: starting, checking, and recovering it by hand
 
-`./run-novhub.sh up`/`status` bring OpenSearch up automatically by calling `opensearch_up`/
-`opensearch_check` in [`steps/opensearch.sh`](steps/opensearch.sh) — that file is the single
-source of truth for the container name, port, image, index name, and default heap
-(`OPENSEARCH_CONTAINER`, `OPENSEARCH_PORT`, `OPENSEARCH_IMAGE`, `OPENSEARCH_INDEX`,
-`OPENSEARCH_HEAP`, all overridable by env var of the same name). It is sourced, not run directly
-(see the `steps/*.sh` row in Scripts above) — the manual commands below are the same operations
-`steps/opensearch.sh` runs, written out by hand for when you want to do this yourself, or verify/
-recover without going through the script.
+`./run-novhub.sh start`/`status` bring OpenSearch up automatically (whole stack or
+`start opensearch`/`status opensearch` alone) by calling `opensearch_up`/`opensearch_check` in
+[`steps/opensearch.sh`](steps/opensearch.sh) — that file is the single source of truth for the
+container name, port, image, index name, and default heap (`OPENSEARCH_CONTAINER`,
+`OPENSEARCH_PORT`, `OPENSEARCH_IMAGE`, `OPENSEARCH_INDEX`, `OPENSEARCH_HEAP`, all overridable by
+env var of the same name). `steps/opensearch.sh` itself is sourced, not run directly — use
+`./novhub-local-stack/opensearch.sh start|stop|status` for the standalone equivalent (see
+"Controlling one component" above). The manual commands below are the same operations, written
+out by hand for when you want to do this yourself, or verify/recover without going through
+either script.
 
 The container is `os-local`, port `127.0.0.1:9200`. It has **no data volume** — its index data
 lives only in the container's own writable layer. That one fact drives every procedure below:
@@ -214,7 +238,7 @@ index.
 
 ### Resizing the heap (on an already-running container, without losing data)
 
-The default heap for a freshly-created container (Scenario B, or any future `run-novhub.sh up`
+The default heap for a freshly-created container (Scenario B, or any future `run-novhub.sh start`
 on a clean host) comes from `OPENSEARCH_HEAP` in [`steps/opensearch.sh`](steps/opensearch.sh)
 (currently `4g`, was `512m`). To change an *already-running* container's heap without recreating
 it from scratch (and losing its data), use the scripted path:
@@ -302,7 +326,7 @@ be removed from a throwaway container before OpenSearch will start from that ima
 ```
 
 `perf-seed.sh seed` writes directly to OpenSearch and NovApi's own Postgres — never through
-LUNA/PLCSIM/plc-node or NovData — so it needs `run-novhub.sh up`'s OpenSearch container and
+LUNA/PLCSIM/plc-node or NovData — so it needs `run-novhub.sh start`'s OpenSearch container and
 NovApi's own `docker compose` stack running first, not the whole local stack. Everything it
 creates is tagged (a reserved robot-id range, one synthetic group/user) so `remove` can undo it
 cleanly; it's idempotent, re-running `seed` on an already-seeded stack just prints
@@ -337,7 +361,7 @@ NovApi at either index via its own `OPENSEARCH_INDEX` env var.
 ## Manual steps (LUNA only)
 
 LUNA's frontend needs the real desktop display, which nothing running non-interactively can
-check or start — `up`/`status` always print the reminder:
+check or start — `start`/`status` always print the reminder:
 
 - Start the backend (T5, `run-luna.sh backend`) and confirm the frontend window is open (T6,
   `run-luna.sh frontend`, needs the real desktop display).
