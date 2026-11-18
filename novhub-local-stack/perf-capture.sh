@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
   cat <<USAGE
-Usage: perf-capture.sh --page analytics|qc_report [--robot-name PERF-ING-910001] [--out <dir>]
+Usage: perf-capture.sh --page analytics|qc_report [--robot-name PERF-ING-910001] [--out <dir>] [--remote]
 
 HUB-106: drives a real page with Playwright (the NovAI build only - checks
 brand-check.sh first, refuses to run otherwise), waits for it to be
@@ -28,9 +28,18 @@ exist - it tracks request ordering, not work volume.
   --robot-name NAME    default PERF-ING-910001
   --out DIR             default: a new dated folder under
                        .state/perf-results/
+  --remote               target is not this local stack: skips brand-check.sh
+                       (it can only read local state) and the local NovApi
+                       log slice/pairing (there is none to read). Local runs
+                       are unaffected - this flag only changes what happens
+                       when you pass it. URL and credentials still come only
+                       from NOVAPP_URL/NOVAPI_URL/PERF_SECRET_FILE - point
+                       those at the target and its own git-ignored secret
+                       file; nothing here is hardcoded.
 
 Needs ./perf-setup.sh already run (installs Playwright) and the stack up
-(opensearch/novapi/novapp) as the NovAI build.
+(opensearch/novapi/novapp) as the NovAI build - or, with --remote, just the
+target reachable at NOVAPP_URL/NOVAPI_URL and a valid PERF_SECRET_FILE for it.
 USAGE
   exit 0
 fi
@@ -41,11 +50,13 @@ source "$SCRIPT_DIR/lib/common.sh"
 PAGE=""
 ROBOT_NAME="PERF-ING-910001"
 OUT_DIR=""
+REMOTE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --page) PAGE="$2"; shift 2 ;;
     --robot-name) ROBOT_NAME="$2"; shift 2 ;;
     --out) OUT_DIR="$2"; shift 2 ;;
+    --remote) REMOTE=1; shift ;;
     *) error "Unknown argument: $1"; exit 1 ;;
   esac
 done
@@ -58,7 +69,11 @@ if [ -z "$OUT_DIR" ]; then
 fi
 mkdir -p "$OUT_DIR"
 
-"$SCRIPT_DIR/brand-check.sh"
+if [ "$REMOTE" -eq 1 ]; then
+  log "remote mode: skipping brand-check.sh - it only reads this stack's local state, not the target's"
+else
+  "$SCRIPT_DIR/brand-check.sh"
+fi
 
 PERF_DIR="$SCRIPT_DIR/.cache/perf-tools"
 if [ ! -d "$PERF_DIR/node_modules/playwright" ]; then
@@ -68,7 +83,7 @@ fi
 
 NOVAPI_LOG="$STATE_DIR/novapi.log"
 log_start_line=0
-if [ -f "$NOVAPI_LOG" ]; then
+if [ "$REMOTE" -eq 0 ] && [ -f "$NOVAPI_LOG" ]; then
   log_start_line="$(wc -l < "$NOVAPI_LOG")"
 fi
 
@@ -76,12 +91,15 @@ log "capturing: $PAGE for $ROBOT_NAME -> $OUT_DIR"
 NODE_PATH="$PERF_DIR/node_modules" node "$SCRIPT_DIR/perf-capture.js" \
   --page="$PAGE" --robot-name="$ROBOT_NAME" --out="$OUT_DIR"
 
-if [ -f "$NOVAPI_LOG" ]; then
+REPORT_ARGS=(--har "$OUT_DIR/${PAGE}.har" --out "$OUT_DIR")
+if [ "$REMOTE" -eq 1 ]; then
+  log "remote mode: no local NovApi log to pair with this HAR - pass one with perf-report.sh --novapi-log yourself if you have it"
+elif [ -f "$NOVAPI_LOG" ]; then
   tail -n "+$((log_start_line + 1))" "$NOVAPI_LOG" > "$OUT_DIR/${PAGE}-novapi.log.slice"
   log "created: $OUT_DIR/${PAGE}-novapi.log.slice"
+  REPORT_ARGS+=(--novapi-log "$OUT_DIR/${PAGE}-novapi.log.slice")
 fi
 
-"$SCRIPT_DIR/perf-report.sh" --har "$OUT_DIR/${PAGE}.har" \
-  --novapi-log "$OUT_DIR/${PAGE}-novapi.log.slice" --out "$OUT_DIR"
+"$SCRIPT_DIR/perf-report.sh" "${REPORT_ARGS[@]}"
 
 log "report: $OUT_DIR/report.html"
