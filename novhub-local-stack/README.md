@@ -43,6 +43,12 @@ desktop display, which nothing running non-interactively can check or start.
 | `perf-capture.sh` | HUB-106: Playwright capture of a real page (Analytics or QC Report) — HAR + Performance trace + a `*-metrics.json` (time to usable, DOM-based list/detail-usable on Analytics, request counts, scripting time, longest task), then runs `perf-report.sh` on the result |
 | `perf-capture.js` | The actual Playwright driver `perf-capture.sh` calls — not run directly |
 | `perf-after.sh` | HUB-106: repeats the exact BEFORE measurement set (brand + frozen-dataset check, endpoint baseline, size sweep, both pages' Playwright capture) in one command, into one `after-<timestamp>` folder |
+| `perf-rank-robots.sh` | HUB-106: read-only - ranks a `--target`'s robots by `weld_run` total over a wide fixed date range, to pick a BEFORE/AFTER robot on a target whose data we don't control |
+| `perf-rank-robots.py` | The actual ranking logic `perf-rank-robots.sh` calls — not run directly |
+| `cloud-tunnel.sh` | HUB-106: read-only SSH local-port-forward (`open`/`status`/`close`) through the cat-dev bastion to one environment's DB + OpenSearch, for `cloud-check.sh` |
+| `cloud-check.sh` | HUB-106: read-only credential check for one environment through its tunnel - DB `SELECT 1` + robot count, OpenSearch health + count tried via basic auth and AWS SigV4 |
+| `cloud-check.py` | The actual check logic `cloud-check.sh` calls — not run directly |
+| `cloud-bastion-check.sh` | HUB-106: plain TCP reachability check from the cat-dev bastion to one environment's DB/OpenSearch hosts, via `exec_ubuntu` |
 | `perf-report.sh` | HUB-106: ONE zero-install `report.html` from any combination of a NovApi log slice, a HAR, a Performance trace, and OpenSearch/Postgres slow logs — or, with `--compare`, a BEFORE-vs-AFTER comparison report from the same inputs on both sides |
 | `perf-report.py` | The actual report-building logic `perf-report.sh` calls — not run directly |
 | `trace-secret-scan.sh` | HUB-106: scans a Chrome Performance trace for an Authorization header/cookie/Bearer token/JWT without ever printing the value — run before sharing any trace file |
@@ -241,20 +247,49 @@ on only one side is listed in the report as not yet comparable, never silently d
 request-ordering/waterfall timing, not just work volume). QC Report has no equivalent QC-status
 badge column, so it keeps `time_to_usable_ms` as its only usable signal.
 
-`perf-capture.sh`/`perf-after.sh`'s target robot name and URLs come from `perf-targets.env` — one
-file, git-ignored, auto-created on first run from the committed `perf-targets.env.example` (local
-defaults only — nothing about dev is ever committed). Edit your own `perf-targets.env` to point
-`PERF_ROBOT_NAME`/`NOVAPP_URL`/`NOVAPI_URL` at a dev target; credentials still go only in the 0600
-`PERF_SECRET_FILE` (`<email>:<password>`), never in `perf-targets.env`. No script hardcodes a
-robot-name default anywhere anymore.
+`perf-capture.sh`/`perf-rank-robots.sh` take `--target NAME` (`perf-after.sh` is always `local`).
+`--target local` (the default) uses `perf-targets.env` — one file, git-ignored, auto-created on
+first run from the committed `perf-targets.env.example` (local defaults only). Any other target
+(e.g. `test`, `dev`) uses `perf-targets.<target>.env`, which you create yourself first (same
+`KEY=value` format: `PERF_ROBOT_NAME`, `NOVAPP_URL`, `NOVAPI_URL`) — nothing about a named target
+is ever committed, and there's no hardcoded fallback for one. Credentials stay only in a 0600
+secret file, never in either config file: `.state/secrets/perf-test-user.secret` for `local`,
+`.state/secrets/perf-test-user-<target>.secret` for any other target (both overridable with
+`PERF_SECRET_FILE`). No script hardcodes a robot-name default anywhere anymore.
 
-`perf-capture.sh --remote` targets an environment other than this local stack (e.g. a shared dev
-deployment): it skips `brand-check.sh` and the local NovApi-log pairing — both only know how to
-read this stack's own local state — and says so in its output. It refuses up front, before
-contacting anything, if `perf-targets.env` is missing the robot name or either URL, or if
-`PERF_SECRET_FILE` is missing or its mode isn't exactly 0600 — there is no local fallback in
-remote mode. Pass a dev NovApi log slice yourself with `perf-report.sh
---novapi-log` afterwards if you have one — remote mode has none to pair automatically.
+`perf-capture.sh --target <name other than local>` targets an environment other than this local
+stack: it skips `brand-check.sh` and the local NovApi-log pairing — both only know how to read
+this stack's own local state — and says so in its output. It refuses up front, before contacting
+anything, if that target's config is missing the robot name, either URL, or the date range (see
+below), or if its secret file is missing or its mode isn't exactly 0600 — there is no local
+fallback for a named target. Pass a log slice yourself with `perf-report.sh --novapi-log`
+afterwards if you have one — a named target has none to pair automatically.
+
+Analytics has no URL param for its date-range filter — it always opens on a relative "last 7
+days" default, so a real BEFORE/AFTER comparison needs that pinned explicitly. `PERF_RANGE_START`/
+`PERF_RANGE_END` (`YYYY-MM-DD`, per-target config, both or neither) make `perf-capture.sh` set the
+range through the picker UI itself after the page settles on its default — required together for
+any non-local `--target`, optional locally. `*-metrics.json` reports `date_range_used` and
+`range_change_usable_ms` (measured from right before the committing change, network cleared at
+that moment, to list-usable + network-idle again — the same way as a manual DevTools BEFORE
+recording); `detail_usable_ms` is measured after the range change, so it reflects the pinned
+range, not the default one.
+
+`perf-rank-robots.sh --target NAME` is read-only: logs into that target, lists its robots, and
+ranks them by `weld_run` total over a wide fixed date range — for picking a BEFORE/AFTER robot on
+a target whose data isn't ours to seed. One robot at a time, a short pause between each, never
+retries, never writes, never prints the login or token.
+
+`cloud-tunnel.sh open|status|close --env dev|test` opens a read-only SSH local forward through
+the cat-dev bastion to that environment's DB and OpenSearch, reading hosts from
+`.state/secrets/novai-<env>/{DB,OPENSEARCH}.secrets` at run time and local ports from
+`cloud-tunnel-ports.env` (git-ignored, auto-created from the committed
+`cloud-tunnel-ports.env.example`). `cloud-check.sh --env dev|test` then checks that tunnel: DB
+`SELECT 1` + a robot count, and OpenSearch health + a count tried both as basic auth and AWS
+SigV4 (NovApi itself only ever uses SigV4 for OpenSearch - see `osRepo/queries.js`). Neither tool
+ever prints a secret value. `cloud-bastion-check.sh --env dev|test` is a separate plain-TCP
+reachability check run from the bastion itself, for confirming it can even reach a given
+environment's hosts before trying to tunnel to them.
 
 The full before/after procedure (frozen-dataset check, folder layout, when to use which tool) is
 documented once, in `~/dev/presentations/novhub-local-stack/hub106-perf-results/README.md` — this

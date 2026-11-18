@@ -3,14 +3,14 @@ set -euo pipefail
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
   cat <<USAGE
-Usage: perf-capture.sh --page analytics|qc_report [--robot-name NAME] [--out <dir>] [--remote]
+Usage: perf-capture.sh --page analytics|qc_report [--robot-name NAME] [--out <dir>] [--target NAME]
 
-HUB-106: drives a real page with Playwright (the NovAI build only - checks
-brand-check.sh first, refuses to run otherwise), waits for it to be
-genuinely usable, and saves a HAR, a Performance trace, and a metrics.json
-into a dated folder. Then runs perf-report.sh on the HAR plus the matching
-slice of NovApi's own log, producing one combined report.html in the same
-folder. Run trace-secret-scan.sh on the trace before sharing it anywhere.
+HUB-106: drives a real page with Playwright, waits for it to be genuinely
+usable, and saves a HAR, a Performance trace, and a metrics.json into a
+dated folder. Then runs perf-report.sh on the HAR plus the matching slice
+of NovApi's own log (local target only), producing one combined
+report.html in the same folder. Run trace-secret-scan.sh on the trace
+before sharing it anywhere.
 
 metrics.json: request counts per endpoint, total scripting time, longest
 task. "Usable" on Analytics is DOM-based (list_usable_ms/detail_usable_ms -
@@ -25,27 +25,41 @@ exist - it tracks request ordering, not work volume.
                        the list-load and detail-view per-run calls fire)
   --page qc_report     WeldQualityList (already batched, no per-run calls -
                        use as the control/comparison page)
-  --robot-name NAME    default: PERF_ROBOT_NAME from perf-targets.env
+  --robot-name NAME    default: PERF_ROBOT_NAME from this target's config
   --out DIR             default: a new dated folder under
                        .state/perf-results/
-  --remote               target is not this local stack: skips brand-check.sh
-                       (it can only read local state) and the local NovApi
-                       log slice/pairing (there is none to read). Local runs
-                       are unaffected - this flag only changes what happens
-                       when you pass it. Refuses up front, before contacting
-                       anything, if perf-targets.env has no robot name or URL
-                       - there is no local fallback in remote mode.
+  --target NAME          which config/secret file to use - default "local"
+                       (this stack, brand-checked, NovApi log paired).
+                       Any other name (e.g. test, dev) means: skip
+                       brand-check.sh and the local NovApi-log pairing -
+                       both only know how to read this stack's own local
+                       state - and refuse up front, before contacting
+                       anything, if that target's config has no robot
+                       name, URL, or date range, or its secret file is
+                       missing or not exactly 0600. There is no local
+                       fallback for a named target.
 
-Robot name and NOVAPP_URL/NOVAPI_URL come from perf-targets.env (one file,
-git-ignored, auto-created from the committed perf-targets.env.example with
-local defaults on first run - edit your own copy to target dev; never commit
-it). Credentials stay only in the 0600 PERF_SECRET_FILE (email:password),
-never in that file either - refuses with one line if it's missing or not
-exactly 0600, before contacting anything.
+On the analytics page, PERF_RANGE_START/PERF_RANGE_END (YYYY-MM-DD) are set
+through the date-range picker UI itself after the page settles on its
+default range - Analytics has no URL param for this. Both required
+together for any non-local --target (refuses up front if only one is set,
+if either isn't YYYY-MM-DD, or if the end is before the start); optional
+locally. metrics.json reports which range was actually used.
 
-Needs ./perf-setup.sh already run (installs Playwright) and the stack up
-(opensearch/novapi/novapp) as the NovAI build - or, with --remote, just the
-target reachable at perf-targets.env's URLs and a valid PERF_SECRET_FILE for it.
+Robot name and NOVAPP_URL/NOVAPI_URL come from perf-targets.env for
+--target local (one file, git-ignored, auto-created from the committed
+perf-targets.env.example with local defaults on first run), or from
+perf-targets.<target>.env for any other --target, which must already
+exist - create it yourself (same KEY=value format) first. Nothing about a
+named target is ever committed. Credentials stay only in a 0600 secret
+file, never in either config file - local target:
+.state/secrets/perf-test-user.secret; any other target:
+.state/secrets/perf-test-user-<target>.secret (both overridable with
+PERF_SECRET_FILE).
+
+Needs ./perf-setup.sh already run (installs Playwright) and, for --target
+local, the stack up (opensearch/novapi/novapp) as the NovAI build. For any
+other target, just that target reachable and its secret file in place.
 USAGE
   exit 0
 fi
@@ -53,18 +67,16 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
-ensure_perf_config
-
 PAGE=""
 ROBOT_NAME=""
 OUT_DIR=""
-REMOTE=0
+TARGET="local"
 while [ $# -gt 0 ]; do
   case "$1" in
     --page) PAGE="$2"; shift 2 ;;
     --robot-name) ROBOT_NAME="$2"; shift 2 ;;
     --out) OUT_DIR="$2"; shift 2 ;;
-    --remote) REMOTE=1; shift ;;
+    --target) TARGET="$2"; shift 2 ;;
     *) error "Unknown argument: $1"; exit 1 ;;
   esac
 done
@@ -72,18 +84,45 @@ if [ -z "$PAGE" ]; then
   error "--page analytics|qc_report is required"
   exit 1
 fi
+
+ensure_perf_config "$TARGET"
+if [ "$TARGET" = "local" ]; then REMOTE=0; else REMOTE=1; fi
+
 [ -n "$ROBOT_NAME" ] || ROBOT_NAME="$(perf_config_get PERF_ROBOT_NAME)"
 [ -z "${NOVAPP_URL:-}" ] && NOVAPP_URL="$(perf_config_get NOVAPP_URL)"
 [ -z "${NOVAPI_URL:-}" ] && NOVAPI_URL="$(perf_config_get NOVAPI_URL)"
 export NOVAPP_URL NOVAPI_URL
 
+[ -n "${PERF_SECRET_FILE:-}" ] || PERF_SECRET_FILE="$(perf_secret_file_for_target "$TARGET")"
+export PERF_SECRET_FILE
+
+[ -z "${PERF_RANGE_START:-}" ] && PERF_RANGE_START="$(perf_config_get PERF_RANGE_START)"
+[ -z "${PERF_RANGE_END:-}" ] && PERF_RANGE_END="$(perf_config_get PERF_RANGE_END)"
+export PERF_RANGE_START PERF_RANGE_END
+
 if [ "$REMOTE" -eq 1 ]; then
-  [ -n "$ROBOT_NAME" ] || { error "remote mode: perf-targets.env has no PERF_ROBOT_NAME set - refusing, no local fallback"; exit 1; }
-  [ -n "$NOVAPP_URL" ] || { error "remote mode: perf-targets.env has no NOVAPP_URL set - refusing, no local fallback"; exit 1; }
-  [ -n "$NOVAPI_URL" ] || { error "remote mode: perf-targets.env has no NOVAPI_URL set - refusing, no local fallback"; exit 1; }
+  [ -n "$ROBOT_NAME" ] || { error "target '$TARGET': $PERF_CONFIG_FILE has no PERF_ROBOT_NAME set - refusing, no local fallback"; exit 1; }
+  [ -n "$NOVAPP_URL" ] || { error "target '$TARGET': $PERF_CONFIG_FILE has no NOVAPP_URL set - refusing, no local fallback"; exit 1; }
+  [ -n "$NOVAPI_URL" ] || { error "target '$TARGET': $PERF_CONFIG_FILE has no NOVAPI_URL set - refusing, no local fallback"; exit 1; }
+  [ -n "$PERF_RANGE_START" ] || { error "target '$TARGET': $PERF_CONFIG_FILE has no PERF_RANGE_START set - refusing, no local fallback"; exit 1; }
+  [ -n "$PERF_RANGE_END" ] || { error "target '$TARGET': $PERF_CONFIG_FILE has no PERF_RANGE_END set - refusing, no local fallback"; exit 1; }
 elif [ -z "$ROBOT_NAME" ]; then
-  error "no robot name - set PERF_ROBOT_NAME in perf-targets.env or pass --robot-name"
+  error "no robot name - set PERF_ROBOT_NAME in $PERF_CONFIG_FILE or pass --robot-name"
   exit 1
+fi
+
+if [ -n "$PERF_RANGE_START" ] || [ -n "$PERF_RANGE_END" ]; then
+  if [ -z "$PERF_RANGE_START" ] || [ -z "$PERF_RANGE_END" ]; then
+    error "PERF_RANGE_START and PERF_RANGE_END must both be set or both be empty - refusing"
+    exit 1
+  fi
+  for d in "$PERF_RANGE_START" "$PERF_RANGE_END"; do
+    [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { error "PERF_RANGE_START/PERF_RANGE_END must be YYYY-MM-DD - got '$d'"; exit 1; }
+  done
+  if [[ "$PERF_RANGE_END" < "$PERF_RANGE_START" ]]; then
+    error "PERF_RANGE_END ($PERF_RANGE_END) is before PERF_RANGE_START ($PERF_RANGE_START) - refusing"
+    exit 1
+  fi
 fi
 
 if [ -z "$OUT_DIR" ]; then
@@ -92,7 +131,7 @@ fi
 mkdir -p "$OUT_DIR"
 
 if [ "$REMOTE" -eq 1 ]; then
-  log "remote mode: skipping brand-check.sh - it only reads this stack's local state, not the target's"
+  log "target '$TARGET': skipping brand-check.sh - it only reads this stack's local state, not the target's"
 else
   "$SCRIPT_DIR/brand-check.sh"
 fi
@@ -109,13 +148,13 @@ if [ "$REMOTE" -eq 0 ] && [ -f "$NOVAPI_LOG" ]; then
   log_start_line="$(wc -l < "$NOVAPI_LOG")"
 fi
 
-log "capturing: $PAGE for $ROBOT_NAME -> $OUT_DIR"
+log "capturing: $PAGE for $ROBOT_NAME (target: $TARGET) -> $OUT_DIR"
 NODE_PATH="$PERF_DIR/node_modules" node "$SCRIPT_DIR/perf-capture.js" \
   --page="$PAGE" --robot-name="$ROBOT_NAME" --out="$OUT_DIR"
 
 REPORT_ARGS=(--har "$OUT_DIR/${PAGE}.har" --out "$OUT_DIR")
 if [ "$REMOTE" -eq 1 ]; then
-  log "remote mode: no local NovApi log to pair with this HAR - pass one with perf-report.sh --novapi-log yourself if you have it"
+  log "target '$TARGET': no local NovApi log to pair with this HAR - pass one with perf-report.sh --novapi-log yourself if you have it"
 elif [ -f "$NOVAPI_LOG" ]; then
   tail -n "+$((log_start_line + 1))" "$NOVAPI_LOG" > "$OUT_DIR/${PAGE}-novapi.log.slice"
   log "created: $OUT_DIR/${PAGE}-novapi.log.slice"

@@ -34,7 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/steps/opensearch.sh"
 
-ensure_perf_config
+ensure_perf_config local
 
 OUT_DIR=""
 ROBOT_NAME=""

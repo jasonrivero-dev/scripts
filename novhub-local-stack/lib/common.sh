@@ -118,22 +118,137 @@ ensure_env_kv() {
   fi
 }
 
-# HUB-106 perf-capture/perf-after target config: one git-ignored file (PERF_CONFIG_FILE),
-# auto-created from the committed .example (local defaults only - the owner edits their own
-# copy to target dev, never committed). No key here falls back to a hardcoded constant.
-PERF_CONFIG_FILE="$NOVHUB_ROOT/perf-targets.env"
-
+# HUB-106 perf-capture/perf-after/perf-rank-robots target config: one git-ignored file per
+# target (PERF_CONFIG_FILE, set by ensure_perf_config). "local" auto-creates from the committed
+# .example (local defaults only - never committed); any other target name must already have its
+# own perf-targets.<target>.env - no hardcoded fallback for a remote target's values.
 ensure_perf_config() {
-  if [ -f "$PERF_CONFIG_FILE" ]; then
-    log "already exists: $PERF_CONFIG_FILE"
+  local target="${1:-local}"
+  local file
+  if [ "$target" = "local" ]; then
+    file="$NOVHUB_ROOT/perf-targets.env"
+    if [ -f "$file" ]; then
+      log "already exists: $file"
+    else
+      cp "$NOVHUB_ROOT/perf-targets.env.example" "$file"
+      log "created: $file (local defaults - edit to target dev/test)"
+    fi
   else
-    cp "$NOVHUB_ROOT/perf-targets.env.example" "$PERF_CONFIG_FILE"
-    log "created: $PERF_CONFIG_FILE (local defaults - edit to target dev)"
+    file="$NOVHUB_ROOT/perf-targets.${target}.env"
+    if [ ! -f "$file" ]; then
+      error "no config for target '$target' - create $file (KEY=value: PERF_ROBOT_NAME, NOVAPP_URL, NOVAPI_URL - see perf-targets.env.example for the format)"
+      exit 1
+    fi
+    log "already exists: $file"
   fi
+  PERF_CONFIG_FILE="$file"
 }
 
 perf_config_get() {
   grep -E "^${1}=" "$PERF_CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true
+}
+
+# One naming convention for the per-target secret file, shared by every tool that logs in.
+perf_secret_file_for_target() {
+  local target="${1:-local}"
+  if [ "$target" = "local" ]; then
+    echo "$NOVHUB_ROOT/.state/secrets/perf-test-user.secret"
+  else
+    echo "$NOVHUB_ROOT/.state/secrets/perf-test-user-${target}.secret"
+  fi
+}
+
+# Tolerant KEY=value reader for the owner's pasted cloud secrets files (novai-<env>/DB.secrets,
+# OPENSEARCH.secrets): skips blank lines and any line with no literal '=' at all (a pasted
+# "Secret key / Secret value" header row has none), tolerates whitespace around key/value.
+# Prints the value only - the caller decides whether to use it or echo a key NAME in an error;
+# never echo what this returns.
+secrets_kv_get() {
+  local file="$1" key="$2"
+  sed -nE "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*(.*)\$/\1/p" "$file" 2>/dev/null \
+    | head -1 | sed -E 's/[[:space:]]+$//'
+}
+
+# One place to turn a secrets-file "host" value into a bare hostname: strips a leading
+# scheme (scheme://), any trailing path, and any :port - callers get the port from the
+# file's own 'port' key or a protocol default, never from this. Prints the cleaned value,
+# or nothing if what's left doesn't look like a plain hostname/IP - callers MUST treat an
+# empty result as invalid input and refuse loudly, never fall through to a TCP/SSH check
+# built from a mangled string (a check against an invalid host is not a real "not reachable").
+normalize_host() {
+  local h="$1"
+  h="${h#*://}"
+  h="${h%%/*}"
+  h="${h%%:*}"
+  if [[ "$h" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    echo "$h"
+  fi
+}
+
+require_0600() {
+  local file="$1" label="$2"
+  [ -f "$file" ] || { error "missing: $file"; exit 1; }
+  local mode
+  mode="$(stat -c '%a' "$file" 2>/dev/null || stat -f '%OLp' "$file")"
+  if [ "$mode" != "600" ]; then
+    error "$label $file is mode $mode, not 0600 - refusing"
+    exit 1
+  fi
+}
+
+# One format for the /etc/hosts marker, shared by cloud-hosts.sh (which adds/removes it) and
+# cloud-ingest.sh (which checks it's present before signing a request to the real hostname) -
+# never duplicate the string in two places.
+cloud_hosts_marker() {
+  echo "# cloud-tunnel-${1} (novhub-local-stack/cloud-hosts.sh - safe to remove by hand)"
+}
+
+# Local tunnel ports: one git-ignored file, non-secret (just port numbers), same
+# auto-create-from-.example pattern as perf-targets.env.
+CLOUD_TUNNEL_PORTS_FILE="$NOVHUB_ROOT/cloud-tunnel-ports.env"
+
+ensure_cloud_tunnel_ports() {
+  if [ -f "$CLOUD_TUNNEL_PORTS_FILE" ]; then
+    log "already exists: $CLOUD_TUNNEL_PORTS_FILE"
+  else
+    cp "$NOVHUB_ROOT/cloud-tunnel-ports.env.example" "$CLOUD_TUNNEL_PORTS_FILE"
+    log "created: $CLOUD_TUNNEL_PORTS_FILE"
+  fi
+}
+
+cloud_tunnel_port_get() {
+  grep -E "^${1}=" "$CLOUD_TUNNEL_PORTS_FILE" 2>/dev/null | head -1 | cut -d= -f2-
+}
+
+# AWS region + named credentials profile per environment - non-secret (a region code and a
+# profile NAME, never a raw key/secret). Same auto-create pattern as the other cloud-*
+# configs. Never ambient: callers export the resolved value as their OWN env var for the one
+# subprocess that needs it, never trusting whatever AWS_DEFAULT_REGION/AWS_PROFILE happen to
+# already be set to in the shell.
+CLOUD_ENV_CONFIG_FILE="$NOVHUB_ROOT/cloud-env.env"
+
+ensure_cloud_env_config() {
+  if [ -f "$CLOUD_ENV_CONFIG_FILE" ]; then
+    log "already exists: $CLOUD_ENV_CONFIG_FILE"
+  else
+    cp "$NOVHUB_ROOT/cloud-env.env.example" "$CLOUD_ENV_CONFIG_FILE"
+    log "created: $CLOUD_ENV_CONFIG_FILE"
+  fi
+}
+
+cloud_env_get() {
+  grep -E "^${1}=" "$CLOUD_ENV_CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2-
+}
+
+# The named-profile route's actual secret material (static keys) lives only in the owner's
+# own ~/.aws/credentials, outside this repo - never ~/.aws/config, which `aws configure`
+# itself leaves at 644 by convention (region/profile-name metadata, not a secret) - enforcing
+# 0600 there would be a stricter bar than AWS's own tooling applies, so this only checks
+# credentials, and only if it exists (an SSO-only profile may have no static keys at all).
+require_aws_credentials_file_0600() {
+  local f="$HOME/.aws/credentials"
+  [ -f "$f" ] || return 0
+  require_0600 "$f" "AWS credentials file"
 }
 
 read_identity() {
