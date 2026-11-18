@@ -11,14 +11,14 @@ import sys
 
 import psycopg2
 import requests
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
+# cloud_common silences urllib3's InsecureRequestWarning globally on import (see its own
+# comment for why verify=False is correct here) - importing it before any request() call,
+# as below, is what makes that take effect for this file's own requests too.
 from cloud_common import (
     normalize_host, read_kv, require, reduce_arn, scrub_arns, sso_login_hint,
     sigv4_sign, get_caller_identity,
 )
-
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 ENV = os.environ.get("CLOUD_CHECK_ENV")
 DB_LOCAL_PORT = os.environ.get("CLOUD_CHECK_DB_LOCAL_PORT")

@@ -5,10 +5,19 @@ answers never drift apart. Never prints a secret value; ARNs are always reduced 
 import re
 
 import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 import botocore.auth
 import botocore.awsrequest
 import botocore.session
+
+# Every OpenSearch request in these tools uses verify=False: the connection is to 127.0.0.1
+# through cloud-tunnel.sh's local forward, not the real TLS endpoint directly, so there's no
+# real certificate to validate against that address - and NovApi itself already does the same
+# for OpenSearch (osRepo/queries.js: `ssl: { rejectUnauthorized: false }`), so this isn't a new
+# weakening. Silenced once here (a global filter) so neither this module's own requests nor
+# cloud-check.py's/cloud-ingest.py's need to repeat it.
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 ARN_RE = re.compile(r"arn:[a-z\-]+:[a-z0-9\-]+:[a-z0-9\-]*:\d{12}:[^\s\"'<>]+")
 SSO_ERROR_TYPES = ("UnauthorizedSSOTokenError", "SSOTokenLoadError", "TokenRetrievalError")
@@ -87,6 +96,13 @@ def sigv4_sign(method, url, region, profile, headers, data=None):
         return None, (f"no AWS credentials found for profile '{profile}' - check it exists "
                        f"(SSO profiles live in ~/.aws/config, static-key profiles in ~/.aws/credentials)")
     frozen = creds.get_frozen_credentials()
+    headers = dict(headers)
+    # A body with no Content-Type gets a flat 406 from OpenSearch ("Content-Type header []
+    # is not supported") - requests' own data=<bytes> never sets one on its own. Added BEFORE
+    # signing (not after) so it's included in SignedHeaders and the signature still matches
+    # the header actually sent - the one real correctness constraint here.
+    if data is not None and "Content-Type" not in headers:
+        headers["Content-Type"] = "application/json"
     request = botocore.awsrequest.AWSRequest(method=method, url=url, data=data, headers=headers)
     botocore.auth.SigV4Auth(frozen, "es", region).add_auth(request)
     return dict(request.headers), None

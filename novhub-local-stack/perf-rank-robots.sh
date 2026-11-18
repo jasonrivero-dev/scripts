@@ -27,9 +27,11 @@ token. Read-only and idempotent - safe to re-run any time.
                    login (one line, email:password, chmod 600 by hand) -
                    both overridable with NOVAPI_URL/PERF_SECRET_FILE.
   --robot-id ID     look up just this one robot's total instead of
-                   ranking every robot - prints a bare number (or
-                   "10000+") to stdout, nothing else, for another script
-                   to read.
+                   ranking every robot - stdout is exactly one token (a
+                   bare number, or "10000+"), nothing else; every log/
+                   info/error line this script or the venv setup prints
+                   goes to stderr, always, so a caller can read stdout
+                   directly without filtering anything out.
 
 Env overrides: PERF_RANK_START/PERF_RANK_END (default 2015-01-01 /
 2030-12-31 - wide and fixed, printed every run), PERF_RANK_PAUSE_MS
@@ -47,38 +49,41 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --target) TARGET="$2"; shift 2 ;;
     --robot-id) ROBOT_ID_ARGS=(--robot-id "$2"); shift 2 ;;
-    *) error "Unknown argument: $1"; exit 1 ;;
+    *) error "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 if [ -z "$TARGET" ]; then
-  error "--target NAME is required (e.g. --target test)"
+  error "--target NAME is required (e.g. --target test)" >&2
   exit 1
 fi
 
-ensure_perf_config "$TARGET"
+ensure_perf_config "$TARGET" >&2
 [ -z "${NOVAPI_URL:-}" ] && NOVAPI_URL="$(perf_config_get NOVAPI_URL)"
 export NOVAPI_URL
-[ -n "$NOVAPI_URL" ] || { error "target '$TARGET': $PERF_CONFIG_FILE has no NOVAPI_URL set - refusing"; exit 1; }
+[ -n "$NOVAPI_URL" ] || { error "target '$TARGET': $PERF_CONFIG_FILE has no NOVAPI_URL set - refusing" >&2; exit 1; }
 
 [ -n "${PERF_SECRET_FILE:-}" ] || PERF_SECRET_FILE="$(perf_secret_file_for_target "$TARGET")"
 export PERF_SECRET_FILE
 if [ ! -f "$PERF_SECRET_FILE" ]; then
-  error "PERF_SECRET_FILE not found: $PERF_SECRET_FILE - refusing"
+  error "PERF_SECRET_FILE not found: $PERF_SECRET_FILE - refusing" >&2
   exit 1
 fi
 secret_mode="$(stat -c '%a' "$PERF_SECRET_FILE" 2>/dev/null || stat -f '%OLp' "$PERF_SECRET_FILE")"
 if [ "$secret_mode" != "600" ]; then
-  error "PERF_SECRET_FILE $PERF_SECRET_FILE is mode $secret_mode, not 0600 - refusing"
+  error "PERF_SECRET_FILE $PERF_SECRET_FILE is mode $secret_mode, not 0600 - refusing" >&2
   exit 1
 fi
 
 VENV_DIR="$NOVHUB_ROOT/.venv"
+# All of this setup output goes to stderr, not stdout - stdout is reserved for
+# perf-rank-robots.py's own output (the ranked table normally, or in --robot-id mode exactly
+# one token: a number or "10000+", for another script to read without this noise mixed in).
 if [ -d "$VENV_DIR" ]; then
-  log "already exists: $VENV_DIR"
+  log "already exists: $VENV_DIR" >&2
 else
   python3 -m venv "$VENV_DIR"
-  log "created: $VENV_DIR"
+  log "created: $VENV_DIR" >&2
 fi
-"$VENV_DIR/bin/pip" install -q -r "$NOVHUB_ROOT/requirements.txt"
+"$VENV_DIR/bin/pip" install -q -r "$NOVHUB_ROOT/requirements.txt" >&2
 
 exec "$VENV_DIR/bin/python" "$NOVHUB_ROOT/perf-rank-robots.py" "${ROBOT_ID_ARGS[@]}"

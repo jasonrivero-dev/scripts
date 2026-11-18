@@ -8,6 +8,7 @@ subprocess's own environment. --remove is dry by default and needs a typed confi
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -66,6 +67,22 @@ def pg_connect(db_kv):
     )
 
 
+def parse_robot_total_output(stdout_text):
+    """Defensive parse of perf-rank-robots.sh --robot-id's stdout: it's supposed to be
+    exactly one token (a bare integer, or "10000+") now that its own setup/log output always
+    goes to stderr - but don't just trust that blindly. Take the LAST non-empty line and
+    validate it; raise ValueError on anything else so the caller refuses instead of guessing."""
+    lines = [l for l in stdout_text.splitlines() if l.strip()]
+    if not lines:
+        raise ValueError("stdout was empty")
+    last = lines[-1].strip()
+    if last == "10000+":
+        return "10000+"
+    if not re.fullmatch(r"\d+", last):
+        raise ValueError(f"last non-empty stdout line is not a number or '10000+': {last!r}")
+    return int(last)
+
+
 def current_total():
     """The "daemon-free path": re-run perf-rank-robots.sh, which already logs into the real
     target NovApi over HTTPS (no tunnel needed for this part - NovApi/NovApp are public
@@ -76,14 +93,14 @@ def current_total():
     )
     if result.returncode != 0:
         sys.exit(f"could not read robot {ROBOT_ID}'s current total: {result.stderr.strip()}")
-    out = result.stdout.strip()
-    if out == "10000+":
+    try:
+        parsed = parse_robot_total_output(result.stdout)
+    except ValueError as e:
+        sys.exit(f"unexpected output from perf-rank-robots.sh --robot-id: {e}")
+    if parsed == "10000+":
         sys.exit(f"robot {ROBOT_ID} is already at OpenSearch's 10000 total cap per weld_run - "
                   f"can't compute how many more to add from this signal; stopping")
-    try:
-        return int(out)
-    except ValueError:
-        sys.exit(f"unexpected output from perf-rank-robots.sh --robot-id: {out!r}")
+    return parsed
 
 
 def synthetic_count(es_host, index):
