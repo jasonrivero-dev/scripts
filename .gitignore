@@ -13,3 +13,4 @@ novhub-local-stack/.cache/
 novhub-local-stack/.state/
 novhub-local-stack/.venv/
 .ai-template/*.local
+bashrc/.keys

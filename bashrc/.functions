@@ -1,0 +1,429 @@
+# Constants
+DOWNLOAD_DIR="${HOME}/dev/downloads"
+LEFT_IP="10.64.0.221"
+RIGHT_IP="10.64.0.188"
+
+# Custom command to change mouse pointer size safely
+# Custom command to change and check mouse pointer size safely
+setcursor() {
+  # 1. Fetch current size (grep filters out 'uint32' text that GNOME sometimes adds)
+  local current_size
+  current_size=$(gsettings get org.gnome.desktop.interface cursor-size | grep -oE '[0-9]+')
+  
+  # 2. Map current size to a readable label
+  local current_label
+  case "$current_size" in
+    24) current_label="Default" ;;
+    48) current_label="Medium" ;;
+    64) current_label="Large" ;;
+    96) current_label="Huge" ;;
+    *)  current_label="Custom" ;;
+  esac
+
+  # 3. If no argument is provided, display current size and exit
+  if [ -z "$1" ]; then
+    echo "Current size: $current_size ($current_label)"
+    echo "Usage: setcursor <size>"
+    echo "Common sizes: 24 (Default), 48 (Medium), 64 (Large), 96 (Huge)"
+    return 0
+  fi
+  
+  # 4. Check if the input is strictly numbers
+  if ! [[ "$1" =~ ^[0-9]+$ ]]; then
+    echo "Error: Cursor size must be a number (e.g., 48)."
+    return 1
+  fi
+  
+  # 5. Check if the number is within a safe range (16 to 128)
+  if [ "$1" -lt 16 ] || [ "$1" -gt 128 ]; then
+    echo "Error: Please choose a size between 16 and 128 to prevent interface glitches."
+    return 1
+  fi
+  
+  # 6. Apply the new setting
+  gsettings set org.gnome.desktop.interface cursor-size "$1"
+  
+  # 7. Map new size to a readable label for the success message
+  local new_label
+  case "$1" in
+    24) new_label="Default" ;;
+    48) new_label="Medium" ;;
+    64) new_label="Large" ;;
+    96) new_label="Huge" ;;
+    *)  new_label="Custom" ;;
+  esac
+
+  echo "Mouse pointer changed from $current_size ($current_label) to $1 ($new_label)!"
+}
+
+update_vscode() {
+    # 1. Push current directory onto the stack and move to Downloads
+    if pushd ~/Downloads > /dev/null; then
+        
+        echo "=== Downloading latest VS Code Debian package ==="
+        if wget -O vscode_latest_amd64.deb "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-x64"; then
+            
+            echo "=== Installing VS Code package ==="
+            sudo dpkg -i vscode_latest_amd64.deb
+            
+            # Clean up the installer binary to save space
+            rm vscode_latest_amd64.deb
+        else
+            echo "Error: Download failed." >&2
+        fi
+        
+        # 2. Pop directory stack to return to the original working directory
+        popd > /dev/null
+    else
+        echo "Error: Could not access ~/Downloads directory." >&2
+    fi
+}
+
+LICENSING_IP=35.91.120.7
+NOVPLAN_IP=34.215.27.32
+NOVPLAN_KEY=~/.ssh/novplan-dev-box-PEM.pem
+EDGE_LICENSING_WEB_IP=44.255.206.14
+EDGE_LICENSING_WEB_KEY="$HOME/.ssh/edge licensing web dashboard.pem"
+
+# Connect to the target machine via SSH
+connect_ubuntu() {
+    local target="$1"
+
+    if [[ "$target" != "novplan" && "$target" != "licensing" && "$target" != "edge-licensing-web" ]]; then
+        echo "❌ Error: Invalid or missing target."
+        echo "Usage: connect_ubuntu <novplan|licensing|edge-licensing-web>"
+        return 1
+    fi
+
+    local ip=""
+    local key="$NOVPLAN_KEY"
+    if [[ "$target" == "novplan" ]]; then
+        ip="$NOVPLAN_IP"
+    elif [[ "$target" == "licensing" ]]; then
+        ip="$LICENSING_IP"
+    else
+        ip="$EDGE_LICENSING_WEB_IP"
+        key="$EDGE_LICENSING_WEB_KEY"
+    fi
+
+    echo "🌐 Connecting to $target Box ($ip)..."
+    ssh -i "$key" ubuntu@"$ip"
+}
+
+# 2. Copy files/folders to the machine
+cp_ubuntu() {
+    local target="$1"
+    local source="$2"
+    local dest="${3:-/home/ubuntu/}"
+
+    if [[ "$target" != "novplan" && "$target" != "licensing" && "$target" != "edge-licensing-web" ]]; then
+        echo "❌ Error: Invalid or missing target."
+        echo "Usage: cp_ubuntu <novplan|licensing|edge-licensing-web> <local_path_to_file_or_dir> [remote_destination_path]"
+        return 1
+    fi
+
+    if [[ -z "$source" ]]; then
+        echo "❌ Error: Please specify the file or directory you want to copy."
+        echo "Usage: cp_ubuntu <novplan|licensing|edge-licensing-web> <local_path_to_file_or_dir> [remote_destination_path]"
+        return 1
+    fi
+
+    local ip=""
+    local key="$NOVPLAN_KEY"
+    if [[ "$target" == "novplan" ]]; then
+        ip="$NOVPLAN_IP"
+    elif [[ "$target" == "licensing" ]]; then
+        ip="$LICENSING_IP"
+    else
+        ip="$EDGE_LICENSING_WEB_IP"
+        key="$EDGE_LICENSING_WEB_KEY"
+    fi
+
+    echo "🚀 Uploading '$source' to ubuntu@$ip:$dest..."
+    scp -r -i "$key" "$source" ubuntu@"$ip":"$dest"
+}
+
+# 3. Run a command on the remote machine
+exec_ubuntu() {
+    local target="$1"
+    shift
+    local cmd="$*"
+
+    if [[ "$target" != "novplan" && "$target" != "licensing" && "$target" != "edge-licensing-web" ]]; then
+        echo "❌ Error: Invalid or missing target."
+        echo "Usage: exec_ubuntu <novplan|licensing|edge-licensing-web> <command>"
+        return 1
+    fi
+
+    if [[ -z "$cmd" ]]; then
+        echo "❌ Error: Please specify the command to run."
+        echo "Usage: exec_ubuntu <novplan|licensing|edge-licensing-web> <command>"
+        return 1
+    fi
+
+    local ip=""
+    local key="$NOVPLAN_KEY"
+    if [[ "$target" == "novplan" ]]; then
+        ip="$NOVPLAN_IP"
+    elif [[ "$target" == "licensing" ]]; then
+        ip="$LICENSING_IP"
+    else
+        ip="$EDGE_LICENSING_WEB_IP"
+        key="$EDGE_LICENSING_WEB_KEY"
+    fi
+
+    echo "⚙️  Running on $target Box ($ip): $cmd"
+    ssh -i "$key" ubuntu@"$ip" "$cmd"
+}
+
+fetch_and_deploy_celeste() {
+    local version=""
+    local ubuntu_version="22.04-x64"
+    local side="any"
+    
+    local TARGET_IP=""
+
+    usage() {
+        echo "Usage: fetch_and_deploy_celeste [version] [os-arch] [side]"
+        echo "  side: 'left' (221), 'right' (188), or 'any'"
+    }
+
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]] || [[ -z "$1" ]]; then
+        usage; return 0
+    fi
+
+    version="$1"
+    [[ -n "$2" ]] && ubuntu_version="$2"
+    [[ -n "$3" ]] && side="$3"
+
+    local ubuntu_folder_suffix="${ubuntu_version%-*}"
+    local deb_name="celeste-ubuntu_${ubuntu_version}-${version}.deb"
+    local s3_uri="s3://novarc-artifacts/celeste/ubuntu_${ubuntu_folder_suffix}/${deb_name}"
+    local target_path="${DOWNLOAD_DIR}/${deb_name}"
+
+    mkdir -p "$DOWNLOAD_DIR"
+    
+    # 1. Resilient Download (Handling 2.5GB file)
+    if [[ -f "$target_path" ]]; then
+        log "Package exists at $target_path. Skipping download."
+    else
+        log "Downloading $deb_name (2.5GB) from S3..."
+        # Increased timeouts to prevent 'Connection reset by peer'
+        if ! aws s3 cp "$s3_uri" "$target_path" --cli-read-timeout 600 --cli-connect-timeout 600; then
+            error "Failed to download $deb_name from S3."
+            return 1
+        fi
+    fi
+
+    # 2. Package & Plugin Verification
+    log "Verifying package structure and plugins..."
+    if ! ls -lh "$target_path" >/dev/null 2>&1; then
+        error "File $target_path is missing or inaccessible."
+        return 1
+    fi
+
+    if ! dpkg -c "$target_path" | grep -q "opt/novarc/apps/celeste/plugins/libffmpeg_recorder.so"; then
+        error "CRITICAL: libffmpeg_recorder.so is MISSING from the .deb package!"
+        return 1
+    fi
+    log "Verification passed: Plugin found."
+
+    # 3. Machine Selection (Ping)
+    if [[ "$side" == "left" ]]; then
+        TARGET_IP="$LEFT_IP"
+    elif [[ "$side" == "right" ]]; then
+        TARGET_IP="$RIGHT_IP"
+    else
+        log "Scanning for available IPC..."
+        if ping -c 1 -W 1 "$RIGHT_IP" >/dev/null 2>&1; then
+            TARGET_IP="$RIGHT_IP"
+        elif ping -c 1 -W 1 "$LEFT_IP" >/dev/null 2>&1; then
+            TARGET_IP="$LEFT_IP"
+        fi
+    fi
+
+    if [[ -z "$TARGET_IP" ]] || ! ping -c 1 -W 1 "$TARGET_IP" >/dev/null 2>&1; then
+        error "Target machine unreachable or not found. Side: $side"
+        return 1
+    fi
+
+    # 4. Transfer
+    log "Transferring to $TARGET_IP:/tmp ..."
+    if scp "$target_path" "novarc@${TARGET_IP}:/tmp"; then
+        log "Successfully deployed to $TARGET_IP"
+    else
+        error "SCP transfer failed."
+        return 1
+    fi
+}
+
+abc()
+{
+	ssh abc@10.64.2.104
+}
+
+deploy_plc() {
+    # IP Configurations
+    local TARGET_USER="novarc"
+    local TARGET_DIR="/tmp/plc-lab"
+
+    # Initial Defaults
+    local SIDE="left"
+    local TARGET_IP=$LEFT_IP
+    local BUILD_MODE="debug"
+    local RELEASE_FLAG=""
+
+    # Argument Parsing (order doesn't matter)
+    for arg in "$@"; do
+        case $arg in
+            right)
+                SIDE="right"
+                TARGET_IP=$RIGHT_IP
+                ;;
+            left)
+                SIDE="left"
+                TARGET_IP=$LEFT_IP
+                ;;
+            release)
+                BUILD_MODE="release"
+                RELEASE_FLAG="--release"
+                ;;
+        esac
+    done
+
+    local REMOTE_HOST="${TARGET_USER}@${TARGET_IP}"
+
+    # 1. Build locally
+    echo "--- Building Workspace ($BUILD_MODE) ---"
+    cargo build $RELEASE_FLAG || return 1
+
+    # 2. Deploy to targeted machine
+    echo "--- Deploying ($BUILD_MODE) to $SIDE Machine ($TARGET_IP) ---"
+    
+    echo "1. Ensuring remote directory exists: $TARGET_DIR"
+    ssh "$REMOTE_HOST" "mkdir -p $TARGET_DIR"
+
+    echo "2. Copying binaries from target/$BUILD_MODE..."
+    # Copying the four established workspace tools
+    scp target/$BUILD_MODE/plc-msg-recv \
+        target/$BUILD_MODE/plc-msg-send \
+        target/$BUILD_MODE/fd-reader \
+        target/$BUILD_MODE/novai-msg-recv \
+        "$REMOTE_HOST:$TARGET_DIR/"
+
+    echo "3. Setting execution permissions..."
+    ssh "$REMOTE_HOST" "chmod +x $TARGET_DIR/*"
+
+    echo "--- Deployment Complete ($BUILD_MODE) to $SIDE. Tools in $TARGET_DIR ---"
+}
+
+# Function to set a random dark background color
+random_dark_bg() {
+    # Array of beautiful, distinct dark hex colors
+    local colors=(
+        "#1E1E2E" # Catppuccin Mocha (Dark Grey/Blue)
+        "#1A1B26" # Tokyo Night (Deep Night Blue)
+        "#282A36" # Dracula Dark (Gothic Grey)
+        "#1E222A" # One Dark Deep (Classic IDE Dark)
+        "#0F1419" # Ayat Dark (Warm Charcoal)
+        "#181825" # Deep Sapphire
+        "#2E3440" # Nord Slate (Muted Blue/Grey)
+        "#161616" # Carbon Black
+        "#0D1117" # GitHub Dark
+        "#1F1F2E" # Dark Indigo
+        "#101C2C" # midnight blue
+        "#142B45" # deep navy
+        "#123847" # dark blue-teal
+        "#202A35" # blue slate
+        "#2B1D16" # espresso
+        "#3D2519" # dark walnut
+        "#49301E" # warm brown
+        "#2E211C" # chestnut
+    )
+
+    # Use /dev/urandom to bypass Zsh's unseeded $RANDOM behavior on startup
+    local rand_index=$(( ($(od -An -N2 -i /dev/urandom) % ${#colors[@]}) + 1 ))
+    local chosen_color="${colors[$rand_index]}"
+
+    # Send the escape sequence to the terminal to change the background color dynamically
+    echo -ne "\e]11;${chosen_color}\a"
+}
+
+stash() {
+    # Check if a comment argument was passed
+    if [ -z "$1" ]; then
+        echo "❌ Error: You must provide a stash comment!"
+        echo "Usage: stash \"your comment here\""
+        return 1
+    fi
+
+    # Execute the stash push including untracked files (-u)
+    git stash push -u -m "$1"
+}
+
+# Smart display, reset, and apply/pop git stashes
+stash_apply() {
+    local action="apply"
+    
+    # Check for pop flags
+    if [[ "$1" == "-p" || "$1" == "--pop" ]]; then
+        action="pop"
+    fi
+
+    # 1. Fetch raw stash list
+    local raw_list
+    raw_list=$(git stash list)
+
+    if [[ -z "$raw_list" ]]; then
+        echo "ℹ️ No stashes found in this repository."
+        return 0
+    fi
+
+    # 2. Display hyper-clean output using awk parsing
+    echo "--- Available Stashes ---"
+    echo "$raw_list" | awk -F': ' '
+    {
+        match($1, /[0-9]+/)
+        idx = substr($1, RSTART, RLENGTH)
+        branch_ctx = $2
+        sub(/^(WIP on |On )/, "", branch_ctx)
+        comment = $3
+        for (i=4; i<=NF; i++) comment = comment ": " $i
+        printf " [%s] %s -> %s\n", idx, branch_ctx, comment
+    }'
+    echo "-------------------------"
+
+    # 3. Prompt user for the index number
+    local index
+    echo -n "Enter index to $action: "
+    read index
+
+    # 4. Input validation
+    if [[ ! "$index" =~ ^[0-9]+$ ]]; then
+        echo "❌ Error: '$index' is not a valid number."
+        return 1
+    fi
+
+    if ! git stash list | grep -q "^stash@{$index}:"; then
+        echo "❌ Error: Stash index [$index] does not exist."
+        return 1
+    fi
+
+    # 5. SMART CHECK: Is the working directory dirty?
+    if [[ -n $(git status --porcelain) ]]; then
+        echo -n "⚠️ You have uncommitted changes. Hard reset workspace first? (y/N): "
+        read -r response
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            echo "💥 Wiping uncommitted modifications..."
+            git reset --hard HEAD && git clean -xdf
+        else
+            echo "⏩ Proceeding without reset (Git will attempt to merge)..."
+        fi
+    fi
+
+    # 6. Execute the Git command
+    echo "⚡ Executing: git stash $action stash@{$index}"
+    git stash "$action" "stash@{$index}"
+}
+
+echo "Functions loaded"

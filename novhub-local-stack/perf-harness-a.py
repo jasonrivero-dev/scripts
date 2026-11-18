@@ -21,6 +21,7 @@ of reporting a failed call's time as if it were a real number.
 import json
 import os
 import statistics
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -40,6 +41,24 @@ SECRET_FILE = os.environ.get(
     "PERF_SECRET_FILE", os.path.join(SCRIPT_DIR, ".state", "secrets", "perf-test-user.secret"))
 NOVAPI_LOG_FILE = os.environ.get("NOVAPI_LOG_FILE", os.path.join(SCRIPT_DIR, ".state", "novapi.log"))
 RESULTS_ROOT = os.environ.get("PERF_RESULTS_DIR", os.path.join(SCRIPT_DIR, ".state", "perf-results"))
+
+
+def detect_brand():
+    """Ground truth: NovApi's own startup log line + NovApp's .env - never an ambient env var."""
+    novapi_brand = "unknown"
+    if os.path.exists(NOVAPI_LOG_FILE):
+        with open(NOVAPI_LOG_FILE) as f:
+            lines = [l for l in f if "IS_NOVAI" in l]
+        if lines:
+            novapi_brand = "NovAI" if "true" in lines[-1] else ("SWR" if "false" in lines[-1] else "unknown")
+    novapp_brand = "unknown"
+    novapp_env = os.path.expanduser(os.environ.get("NOVAPP_REPO", "~/dev/novhub") + "/.env")
+    if os.path.exists(novapp_env):
+        with open(novapp_env) as f:
+            for line in f:
+                if line.startswith("VITE_IS_NOVAI="):
+                    novapp_brand = "NovAI" if line.strip().endswith("true") else "SWR"
+    return {"novapi": novapi_brand, "novapp": novapp_brand}
 
 
 def login():
@@ -235,6 +254,11 @@ def log_tail(start_line):
 
 
 def main():
+    brand = detect_brand()
+    if brand["novapi"] != "NovAI" or brand["novapp"] != "NovAI":
+        sys.exit(f"FAILED: not running as NovAI on both sides ({brand}) - "
+                  f"TAS (the customer this measures) runs NovAI robots only")
+
     token = login()
     headers = {"Authorization": f"bearer {token}"}
 
@@ -247,6 +271,7 @@ def main():
                 "\"baseline\": \"unavailable\" block means every call in it failed (see "
                 "statuses/error_count) - that is not a timing result, not a zero. Trial 0 is "
                 "cold; trials 1+ are warm.",
+        "brand": brand,
         "robot_ids": ROBOT_IDS, "per_page": PER_PAGE, "batch_size": BATCH_SIZE,
         "parallel_concurrency": PARALLEL_CONCURRENCY,
         "summary": summarize_results(trials, ROBOT_IDS),

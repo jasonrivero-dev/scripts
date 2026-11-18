@@ -1,0 +1,40 @@
+# --- PATHS ---
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
+export GOPATH="$HOME/go"
+source .keys
+
+# --- SYSTEM SETTINGS ---
+export CLICOLOR_FORCE=1
+export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01;31:quote=01'
+# Disable mutter workspaces only on primary
+gsettings set org.gnome.mutter workspaces-only-on-primary false
+
+# --- ALIASES ---
+# Mac-style Clipboard
+alias pbcopy='xclip -selection clipboard'
+alias pbpaste='xclip -selection clipboard -o'
+
+# Sound & Alerts
+alias alert='paplay /usr/share/sounds/freedesktop/stereo/complete.oga &'
+alias warning='paplay /usr/share/sounds/freedesktop/stereo/dialog-warning.oga &'
+alias bell='paplay /usr/share/sounds/freedesktop/stereo/bell.oga >/dev/null 2>&1 & disown'
+
+alias rerungha='git commit --allow-empty -m "Trigger GHA rerun" && git push'
+
+# Modern Unix Tools
+alias f='fdfind'
+alias gui='gitui'
+alias gls='DELTA_FEATURES=sbs git log -p'
+alias rb='systemctl reboot'
+alias b="git branch | grep '*'"
+# --- FUNCTIONS ---
+function resetSound() {
+    systemctl --user stop pipewire pipewire-pulse wireplumber
+    sudo alsa force-reload
+    systemctl --user start pipewire pipewire-pulse wireplumber
+    pactl set-sink-mute @DEFAULT_SINK@ 0
+    pactl set-sink-volume @DEFAULT_SINK@ 100%
+    alert
+}
+
+echo "Remember you can reset the sound with: resetSound"

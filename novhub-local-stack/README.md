@@ -22,6 +22,7 @@ desktop display, which nothing running non-interactively can check or start.
 | `prereqs.sh` | Pre-flight check — runs automatically before each component command |
 | `opensearch.sh`, `novdata.sh`, `novapi.sh`, `novapp.sh`, `plcsim.sh`, `plcnode.sh`, `luna.sh` | Thin per-component wrappers — `<name>.sh start\|stop\|status`, same effect as `run-novhub.sh start\|stop\|status <name>` |
 | `sync.sh` | One-shot job — run after the stack is up to reflect a new simulated weld |
+| `weld.sh` | One-shot job — `start`/`stop`/`status` a hot weld on PLCSIM's REST API, so NovData sees a run without needing `plc-node`/LUNA |
 | `setup-host.sh` | One-time host sysctl setup (the three kernel limits below) |
 | `reset.sh` | Dev-hygiene: selectively wipe containers/data, or stop just PLCSIM+`plc-node` |
 | `loader.py` | OpenSearch loader — reads NovData's Postgres, posts to `novhub-local` (used by `sync`, never run directly) |
@@ -35,6 +36,17 @@ desktop display, which nothing running non-interactively can check or start.
 | `perf-ingester-seed.py` | The actual seed/remove logic `perf-ingester-seed.sh` calls — not run directly |
 | `perf-ingester-load.sh` | HUB-106: runs `opensearch-ingester` (`~/dev/opensearch-ingester`) in-process over synthetic Hermit V2 payloads, writing to a separate index so it never touches `perf-seed.sh`'s data |
 | `opensearch-resize-heap.sh` | HUB-106: bumps the local OpenSearch container's JVM heap without losing data (stop, commit, recreate — see the Appendix) |
+| `brand-check.sh` | HUB-106: prints NovApi/NovApp's brand (NovAI vs SWR), exit 0 only if both are NovAI — TAS runs NovAI only |
+| `perf-sweep.sh` | HUB-106: sweeps `weld_run` page size and both batch endpoints' batch size on the existing seeded dataset (no re-ingest) |
+| `perf-sweep.py` | The actual sweep logic `perf-sweep.sh` calls — not run directly |
+| `perf-slowlog.sh` | HUB-106: `on`/`off`/`status` toggle for OpenSearch/Postgres slow-query logging, for `perf-report.sh`'s NovApi/OpenSearch/Postgres breakdown |
+| `perf-capture.sh` | HUB-106: Playwright capture of a real page (Analytics or QC Report) — HAR + Performance trace + a `*-metrics.json` (time to usable, DOM-based list/detail-usable on Analytics, request counts, scripting time, longest task), then runs `perf-report.sh` on the result |
+| `perf-capture.js` | The actual Playwright driver `perf-capture.sh` calls — not run directly |
+| `perf-after.sh` | HUB-106: repeats the exact BEFORE measurement set (brand + frozen-dataset check, endpoint baseline, size sweep, both pages' Playwright capture) in one command, into one `after-<timestamp>` folder |
+| `perf-report.sh` | HUB-106: ONE zero-install `report.html` from any combination of a NovApi log slice, a HAR, a Performance trace, and OpenSearch/Postgres slow logs — or, with `--compare`, a BEFORE-vs-AFTER comparison report from the same inputs on both sides |
+| `perf-report.py` | The actual report-building logic `perf-report.sh` calls — not run directly |
+| `trace-secret-scan.sh` | HUB-106: scans a Chrome Performance trace for an Authorization header/cookie/Bearer token/JWT without ever printing the value — run before sharing any trace file |
+| `trace-secret-scan.py` | The actual scan logic `trace-secret-scan.sh` calls — not run directly |
 | `steps/*.sh` | One file per component (`opensearch`, `novdata`, `novapi`, `novapp`, `plcsim`, `plcnode`, `luna`, `sync`, `prereqs`) — sourced by `run-novhub.sh`/`reset.sh`, not run directly |
 
 Every script meant to be run directly takes `-h`/`--help`.
@@ -75,14 +87,17 @@ The whole-stack entrypoint does the same sequence in one call:
 once that's done and it continues from there. `status` never stops early and never changes
 anything.
 
-Afterward — once the stack is up, each time you want a simulated weld reflected in NovApp:
+Afterward — once the stack is up, each time you want a new simulated weld to show up in NovApp:
 
 ```bash
-./novhub-local-stack/run-novhub.sh start sync    # or: ./novhub-local-stack/sync.sh start
+./novhub-local-stack/weld.sh start               # trigger a weld on PLCSIM's REST API
+./novhub-local-stack/weld.sh stop                # after a few seconds
+./novhub-local-stack/run-novhub.sh start sync     # or: ./novhub-local-stack/sync.sh start
 ```
 
-`sync` is a one-shot job, not a persistent service — it's not part of the sequence above, and
-its own `stop`/`status` just say so and change nothing.
+Neither `weld` nor `sync` is a persistent service — they're one-shot jobs, not part of the
+startup sequence above, and their own `stop`/`status` (where they have one) just report state
+and change nothing.
 
 ### Controlling one component
 
@@ -202,6 +217,33 @@ the generator adds `robot_id` alongside `id` in the payload (`cmd/perfload/main.
 `-include-robot-id=false` to reproduce the real gap. Whether real production payloads actually
 use this `id`/`model` shape (vs. the ingester's own test fixtures, which use `robot_id`/
 `robot_type`) is unconfirmed as of 2026-11-17 — owner decision pending via COORDINATOR.
+
+### Measuring and reporting (size sweep, page capture, the graphical report)
+
+```bash
+./novhub-local-stack/brand-check.sh                               # NovAI on both sides? exit 0 only if so
+./novhub-local-stack/perf-sweep.sh                                 # how time grows with request size, same dataset
+./novhub-local-stack/perf-slowlog.sh on                            # OpenSearch/Postgres slow-query logging, for the breakdown below (off when done)
+./novhub-local-stack/perf-capture.sh --page analytics --out <dir>  # Playwright: HAR + trace + metrics.json, then builds <dir>/report.html itself
+./novhub-local-stack/perf-after.sh                                 # brand+dataset check, baseline, sweep, both pages' capture - one after-<ts> folder
+./novhub-local-stack/trace-secret-scan.sh <trace.json>              # run before sharing ANY Performance trace - never prints the match, only where
+./novhub-local-stack/perf-report.sh --har <har> --novapi-log <log> --trace <trace> --out <dir>           # combine any of these into one report.html
+./novhub-local-stack/perf-report.sh --compare --before-har-analytics <har> --after-har-analytics <har> --out <dir>  # BEFORE vs AFTER, same inputs both sides - see --help for every --before-X/--after-X pair
+```
+
+`perf-report.sh --compare` is the same tool as the single-run form, not a second one — pass
+`--before-X`/`--after-X` pairs (HAR, NovApi-log slice, Playwright `--capture-*` metrics —
+repeatable for multiple trials, Performance trace) instead of the plain flags; anything present
+on only one side is listed in the report as not yet comparable, never silently dropped.
+`perf-capture.sh`'s own `*-metrics.json` on the Analytics page carries DOM-based `list_usable_ms`/
+`detail_usable_ms` (QC-status badge filled + row count stable) alongside the older
+`time_to_usable_ms` (network-idle proxy, kept as a labelled secondary number — exposed to
+request-ordering/waterfall timing, not just work volume). QC Report has no equivalent QC-status
+badge column, so it keeps `time_to_usable_ms` as its only usable signal.
+
+The full before/after procedure (frozen-dataset check, folder layout, when to use which tool) is
+documented once, in `~/dev/presentations/novhub-local-stack/hub106-perf-results/README.md` — this
+section is the tool reference, that doc is the procedure.
 
 ## Appendix: OpenSearch manual operations
 

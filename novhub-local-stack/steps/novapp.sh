@@ -23,11 +23,32 @@ novapp_up() {
   ensure_env_kv .env VITE_PRODUCTION "false"
   ensure_env_kv .env VITE_PORT "5173"
 
-  start_background novapp bash -c "cd \"$NOVAPP_REPO\" && npm install && exec npm run dev"
+  # Never rely on an ambient shell value for the brand flag - same bug class as NovApi's AWS
+  # creds leaking in from the shell profile earlier; strip it so only .env's value applies.
+  start_background novapp env -u VITE_IS_NOVAI \
+    bash -c "cd \"$NOVAPP_REPO\" && npm install && exec npm run dev"
 
   until listening "$NOVAPP_PORT"; do sleep 1; done
   log "ok: NovApp listening on $NOVAPP_PORT"
+
+  local brand
+  brand="$(novapp_brand)"
+  log "brand: $brand"
+  if [ "$brand" != "NovAI" ]; then
+    error "FAILED: NovApp is not running as the NovAI build ($brand) - TAS runs NovAI robots only"
+    return 1
+  fi
   return 0
+}
+
+novapp_brand() {
+  local val
+  val="$(grep -E '^VITE_IS_NOVAI=' "$NOVAPP_REPO/.env" 2>/dev/null | cut -d= -f2-)"
+  case "$val" in
+    true) echo "NovAI" ;;
+    false) echo "SWR" ;;
+    *) echo "unknown (VITE_IS_NOVAI=${val:-unset} in $NOVAPP_REPO/.env)" ;;
+  esac
 }
 
 novapp_down() {

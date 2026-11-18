@@ -127,7 +127,10 @@ SQL
 
   # dotenv never overrides a var already set in the process env - an ambient real
   # AWS_ACCESS_KEY_ID/etc from the shell's own profile would silently beat .env's MinIO ones.
+  # NODE_ENV=development set explicitly (not left ambient) - local dev, and some of NovApi's
+  # own env-gated behavior (IS_NOVAI among it) depends on it.
   start_background novapi env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+    -u IS_NOVAI NODE_ENV=development \
     bash -c "cd \"$NOVAPI_REPO\" && npm install && exec npm run dev"
 
   wait_for_port novapi "$NOVAPI_PORT" || return 1
@@ -147,7 +150,27 @@ SQL
     return 1
   fi
   log "ok: $ping"
+
+  local brand
+  brand="$(novapi_brand)"
+  log "brand: $brand"
+  if [ "$brand" != "NovAI" ]; then
+    error "FAILED: NovApi is not running as the NovAI build ($brand) - TAS runs NovAI robots only"
+    return 1
+  fi
   return 0
+}
+
+novapi_brand() {
+  # The app's own startup log line is the ground truth (constants/index.js) - more reliable
+  # than inspecting env vars of the wrong process in a nodemon/npm/node chain.
+  local line
+  line="$(grep -i "IS_NOVAI" "$STATE_DIR/novapi.log" 2>/dev/null | tail -1)"
+  case "$line" in
+    *"IS_NOVAI true"*) echo "NovAI" ;;
+    *"IS_NOVAI false"*) echo "SWR" ;;
+    *) echo "unknown (no IS_NOVAI line seen in $STATE_DIR/novapi.log yet)" ;;
+  esac
 }
 
 novapi_down() {
