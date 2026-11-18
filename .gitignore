@@ -12,5 +12,6 @@ luna/.cache/
 novhub-local-stack/.cache/
 novhub-local-stack/.state/
 novhub-local-stack/.venv/
+novhub-local-stack/perf-targets.env
 .ai-template/*.local
 bashrc/.keys

@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   cat <<USAGE
-Usage: perf-after.sh [--out <dir>] [--robot-name PERF-ING-910001] [--har <path>] [--trace <path>]
+Usage: perf-after.sh [--out <dir>] [--robot-name NAME] [--har <path>] [--trace <path>]
 
 HUB-106: repeats the exact BEFORE measurement set on the same frozen dataset, one command -
 NovAI brand check, frozen-dataset count check, endpoint baseline (perf-harness-a), size sweep
@@ -19,8 +19,8 @@ qc_report-*, manual-har-*, manual-trace-*) - they cover different time windows, 
 force them into one combined report; use perf-report.sh --compare to build the before/after comparison.
 
   --out <dir>            default: hub106-perf-results/after-<UTC timestamp>
-  --robot-name NAME      default PERF-ING-910001 (must match the BEFORE run's robot for a
-                          meaningful comparison)
+  --robot-name NAME      default: PERF_ROBOT_NAME from perf-targets.env (must match the
+                          BEFORE run's robot for a meaningful comparison)
   --har <path>            owner's manually re-exported HAR for this AFTER run
   --trace <path>          owner's manually re-exported Performance trace for this AFTER run
 
@@ -34,8 +34,10 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/steps/opensearch.sh"
 
+ensure_perf_config
+
 OUT_DIR=""
-ROBOT_NAME="PERF-ING-910001"
+ROBOT_NAME=""
 HAR_PATH=""
 TRACE_PATH=""
 while [ $# -gt 0 ]; do
@@ -47,6 +49,11 @@ while [ $# -gt 0 ]; do
     *) error "Unknown argument: $1"; exit 1 ;;
   esac
 done
+[ -n "$ROBOT_NAME" ] || ROBOT_NAME="$(perf_config_get PERF_ROBOT_NAME)"
+if [ -z "$ROBOT_NAME" ]; then
+  error "no robot name - set PERF_ROBOT_NAME in perf-targets.env or pass --robot-name"
+  exit 1
+fi
 [ -n "$OUT_DIR" ] || OUT_DIR="$HOME/dev/presentations/novhub-local-stack/hub106-perf-results/after-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$OUT_DIR"
 log "after-run folder: $OUT_DIR"

@@ -118,6 +118,24 @@ ensure_env_kv() {
   fi
 }
 
+# HUB-106 perf-capture/perf-after target config: one git-ignored file (PERF_CONFIG_FILE),
+# auto-created from the committed .example (local defaults only - the owner edits their own
+# copy to target dev, never committed). No key here falls back to a hardcoded constant.
+PERF_CONFIG_FILE="$NOVHUB_ROOT/perf-targets.env"
+
+ensure_perf_config() {
+  if [ -f "$PERF_CONFIG_FILE" ]; then
+    log "already exists: $PERF_CONFIG_FILE"
+  else
+    cp "$NOVHUB_ROOT/perf-targets.env.example" "$PERF_CONFIG_FILE"
+    log "created: $PERF_CONFIG_FILE (local defaults - edit to target dev)"
+  fi
+}
+
+perf_config_get() {
+  grep -E "^${1}=" "$PERF_CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true
+}
+
 read_identity() {
   local conf="/var/opt/novarc/configure"
   if [ ! -f "$conf" ]; then

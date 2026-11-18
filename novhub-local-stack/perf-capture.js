@@ -25,7 +25,7 @@ const BASE_URL = process.env.NOVAPP_URL || 'http://localhost:5173';
 const NOVAPI_URL = process.env.NOVAPI_URL || 'http://localhost:3000';
 const SECRET_FILE = process.env.PERF_SECRET_FILE ||
   path.join(__dirname, '.state', 'secrets', 'perf-test-user.secret');
-const ROBOT_NAME = args['robot-name'] || 'PERF-ING-910001';
+const ROBOT_NAME = args['robot-name']; // always passed explicitly by perf-capture.sh, from perf-targets.env
 const PAGE = args.page || 'analytics'; // 'analytics' or 'qc_report'
 const OUT_DIR = args.out;
 const CLICK_ROW = PAGE === 'analytics'; // Analytics: list-load N+1 already fires; click a row for detail-view N+1 too.
@@ -47,8 +47,8 @@ const DOM_STABLE_MS = 300; // row count + QC badges must hold steady this long b
 const DOM_POLL_MS = 100;
 const DOM_USABLE_TIMEOUT_MS = 20000;
 
-if (!OUT_DIR) {
-  console.error('Usage: node perf-capture.js --page=analytics|qc_report --out=<dir> [--robot-name=PERF-ING-910001]');
+if (!OUT_DIR || !ROBOT_NAME) {
+  console.error('Usage: node perf-capture.js --page=analytics|qc_report --out=<dir> --robot-name=<name>');
   process.exit(1);
 }
 fs.mkdirSync(OUT_DIR, { recursive: true });

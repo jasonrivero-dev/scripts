@@ -241,12 +241,19 @@ on only one side is listed in the report as not yet comparable, never silently d
 request-ordering/waterfall timing, not just work volume). QC Report has no equivalent QC-status
 badge column, so it keeps `time_to_usable_ms` as its only usable signal.
 
+`perf-capture.sh`/`perf-after.sh`'s target robot name and URLs come from `perf-targets.env` — one
+file, git-ignored, auto-created on first run from the committed `perf-targets.env.example` (local
+defaults only — nothing about dev is ever committed). Edit your own `perf-targets.env` to point
+`PERF_ROBOT_NAME`/`NOVAPP_URL`/`NOVAPI_URL` at a dev target; credentials still go only in the 0600
+`PERF_SECRET_FILE` (`<email>:<password>`), never in `perf-targets.env`. No script hardcodes a
+robot-name default anywhere anymore.
+
 `perf-capture.sh --remote` targets an environment other than this local stack (e.g. a shared dev
 deployment): it skips `brand-check.sh` and the local NovApi-log pairing — both only know how to
-read this stack's own local state — and says so in its output. URL and credentials are never
-hardcoded either way: `NOVAPP_URL`/`NOVAPI_URL`/`PERF_SECRET_FILE` point at the target and its own
-git-ignored secret file (`<email>:<password>`, 0600). Pass a dev NovApi log slice yourself with
-`perf-report.sh --novapi-log` afterwards if you have one — remote mode has none to pair automatically.
+read this stack's own local state — and says so in its output. It refuses up front, before
+contacting anything, if `perf-targets.env` is missing the robot name or either URL — there is no
+local fallback in remote mode. Pass a dev NovApi log slice yourself with `perf-report.sh
+--novapi-log` afterwards if you have one — remote mode has none to pair automatically.
 
 The full before/after procedure (frozen-dataset check, folder layout, when to use which tool) is
 documented once, in `~/dev/presentations/novhub-local-stack/hub106-perf-results/README.md` — this

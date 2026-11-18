@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
   cat <<USAGE
-Usage: perf-capture.sh --page analytics|qc_report [--robot-name PERF-ING-910001] [--out <dir>] [--remote]
+Usage: perf-capture.sh --page analytics|qc_report [--robot-name NAME] [--out <dir>] [--remote]
 
 HUB-106: drives a real page with Playwright (the NovAI build only - checks
 brand-check.sh first, refuses to run otherwise), waits for it to be
@@ -25,21 +25,26 @@ exist - it tracks request ordering, not work volume.
                        the list-load and detail-view per-run calls fire)
   --page qc_report     WeldQualityList (already batched, no per-run calls -
                        use as the control/comparison page)
-  --robot-name NAME    default PERF-ING-910001
+  --robot-name NAME    default: PERF_ROBOT_NAME from perf-targets.env
   --out DIR             default: a new dated folder under
                        .state/perf-results/
   --remote               target is not this local stack: skips brand-check.sh
                        (it can only read local state) and the local NovApi
                        log slice/pairing (there is none to read). Local runs
                        are unaffected - this flag only changes what happens
-                       when you pass it. URL and credentials still come only
-                       from NOVAPP_URL/NOVAPI_URL/PERF_SECRET_FILE - point
-                       those at the target and its own git-ignored secret
-                       file; nothing here is hardcoded.
+                       when you pass it. Refuses up front, before contacting
+                       anything, if perf-targets.env has no robot name or URL
+                       - there is no local fallback in remote mode.
+
+Robot name and NOVAPP_URL/NOVAPI_URL come from perf-targets.env (one file,
+git-ignored, auto-created from the committed perf-targets.env.example with
+local defaults on first run - edit your own copy to target dev; never commit
+it). Credentials stay only in the 0600 PERF_SECRET_FILE, never in that file
+either.
 
 Needs ./perf-setup.sh already run (installs Playwright) and the stack up
 (opensearch/novapi/novapp) as the NovAI build - or, with --remote, just the
-target reachable at NOVAPP_URL/NOVAPI_URL and a valid PERF_SECRET_FILE for it.
+target reachable at perf-targets.env's URLs and a valid PERF_SECRET_FILE for it.
 USAGE
   exit 0
 fi
@@ -47,8 +52,10 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
+ensure_perf_config
+
 PAGE=""
-ROBOT_NAME="PERF-ING-910001"
+ROBOT_NAME=""
 OUT_DIR=""
 REMOTE=0
 while [ $# -gt 0 ]; do
@@ -64,6 +71,20 @@ if [ -z "$PAGE" ]; then
   error "--page analytics|qc_report is required"
   exit 1
 fi
+[ -n "$ROBOT_NAME" ] || ROBOT_NAME="$(perf_config_get PERF_ROBOT_NAME)"
+[ -z "${NOVAPP_URL:-}" ] && NOVAPP_URL="$(perf_config_get NOVAPP_URL)"
+[ -z "${NOVAPI_URL:-}" ] && NOVAPI_URL="$(perf_config_get NOVAPI_URL)"
+export NOVAPP_URL NOVAPI_URL
+
+if [ "$REMOTE" -eq 1 ]; then
+  [ -n "$ROBOT_NAME" ] || { error "remote mode: perf-targets.env has no PERF_ROBOT_NAME set - refusing, no local fallback"; exit 1; }
+  [ -n "$NOVAPP_URL" ] || { error "remote mode: perf-targets.env has no NOVAPP_URL set - refusing, no local fallback"; exit 1; }
+  [ -n "$NOVAPI_URL" ] || { error "remote mode: perf-targets.env has no NOVAPI_URL set - refusing, no local fallback"; exit 1; }
+elif [ -z "$ROBOT_NAME" ]; then
+  error "no robot name - set PERF_ROBOT_NAME in perf-targets.env or pass --robot-name"
+  exit 1
+fi
+
 if [ -z "$OUT_DIR" ]; then
   OUT_DIR="$STATE_DIR/perf-results/$(date -u +%Y%m%dT%H%M%SZ)"
 fi
