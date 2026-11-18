@@ -101,7 +101,20 @@ async function waitForTableUsable(page, containerSelector, qcColumnIndex) {
   return false;
 }
 
+function checkSecretFile() {
+  if (!fs.existsSync(SECRET_FILE)) {
+    console.error(`[ERROR] PERF_SECRET_FILE not found: ${SECRET_FILE} - refusing`);
+    process.exit(1);
+  }
+  const mode = fs.statSync(SECRET_FILE).mode & 0o777;
+  if (mode !== 0o600) {
+    console.error(`[ERROR] PERF_SECRET_FILE ${SECRET_FILE} is mode ${mode.toString(8)}, not 0600 - refusing`);
+    process.exit(1);
+  }
+}
+
 async function login() {
+  checkSecretFile();
   const [email, password] = fs.readFileSync(SECRET_FILE, 'utf8').trim().split(':');
   const resp = await fetch(`${NOVAPI_URL}/api/v1/auth/signin`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

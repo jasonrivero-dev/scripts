@@ -39,8 +39,9 @@ exist - it tracks request ordering, not work volume.
 Robot name and NOVAPP_URL/NOVAPI_URL come from perf-targets.env (one file,
 git-ignored, auto-created from the committed perf-targets.env.example with
 local defaults on first run - edit your own copy to target dev; never commit
-it). Credentials stay only in the 0600 PERF_SECRET_FILE, never in that file
-either.
+it). Credentials stay only in the 0600 PERF_SECRET_FILE (email:password),
+never in that file either - refuses with one line if it's missing or not
+exactly 0600, before contacting anything.
 
 Needs ./perf-setup.sh already run (installs Playwright) and the stack up
 (opensearch/novapi/novapp) as the NovAI build - or, with --remote, just the

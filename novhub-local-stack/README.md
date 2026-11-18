@@ -251,8 +251,9 @@ robot-name default anywhere anymore.
 `perf-capture.sh --remote` targets an environment other than this local stack (e.g. a shared dev
 deployment): it skips `brand-check.sh` and the local NovApi-log pairing — both only know how to
 read this stack's own local state — and says so in its output. It refuses up front, before
-contacting anything, if `perf-targets.env` is missing the robot name or either URL — there is no
-local fallback in remote mode. Pass a dev NovApi log slice yourself with `perf-report.sh
+contacting anything, if `perf-targets.env` is missing the robot name or either URL, or if
+`PERF_SECRET_FILE` is missing or its mode isn't exactly 0600 — there is no local fallback in
+remote mode. Pass a dev NovApi log slice yourself with `perf-report.sh
 --novapi-log` afterwards if you have one — remote mode has none to pair automatically.
 
 The full before/after procedure (frozen-dataset check, folder layout, when to use which tool) is
