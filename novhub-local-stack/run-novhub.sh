@@ -18,17 +18,35 @@ source "$SCRIPT_DIR/steps/luna.sh"
 source "$SCRIPT_DIR/steps/sync.sh"
 
 ORDERED_STEPS=(opensearch novdata novapi novapp plcsim plcnode luna)
+ALL_COMPONENTS=("${ORDERED_STEPS[@]}" sync)
 
 usage() {
   cat <<USAGE
-Usage: run-novhub.sh [up|status|down|sync]
+Usage: run-novhub.sh start|stop|status [component]
 
-  up      bring every automatable component up, in order (stops at the first
-          failure or manual-action step; PLCSIM/plc-node build+install+start
-          for real here, prompting for sudo directly when needed)
-  status  report every component's current state, change nothing (default)
-  down    stop everything this script started; containers stopped not removed
-  sync    load the latest weld into OpenSearch, then run NovSync (standalone)
+  start [component]   no component = bring up the whole stack, in order (stops
+                       at the first failure or manual-action step; PLCSIM/
+                       plc-node build+install+start for real, prompting for
+                       sudo when needed). With a component, only that one.
+  stop [component]    no component = stop everything this script started
+                       (containers stopped, not removed). With a component,
+                       only that one.
+  status [component]  report current state, change nothing (default with no
+                       component). With a component, only that one.
+
+Valid components: ${ALL_COMPONENTS[*]}
+('sync' only does real work under start - it is a one-shot job, not a
+persistent service, so 'stop sync'/'status sync' just say so.)
+
+To bring the stack up manually, one component at a time, in order:
+  start opensearch
+  start novdata
+  start novapi
+  start novapp
+  start plcsim
+  start plcnode
+  start luna          (always prints manual instructions, starts nothing itself)
+Each is identical to running that component's own wrapper script, e.g. ./opensearch.sh start.
 
 LUNA's backend/frontend always print manual instructions - this script never
 starts them (the frontend needs the real desktop display).
@@ -68,14 +86,30 @@ cmd_down() {
 }
 
 cmd="${1:-status}"
+component="${2:-}"
+
 case "$cmd" in
-  up) cmd_up ;;
-  status) cmd_status ;;
-  down) cmd_down ;;
-  sync) sync_up ;;
+  start|stop|status)
+    if [ -n "$component" ]; then
+      case " ${ALL_COMPONENTS[*]} " in
+        *" $component "*) ;;
+        *)
+          error "Unknown component: $component (expected one of: ${ALL_COMPONENTS[*]})"
+          exit 1
+          ;;
+      esac
+      component_dispatch "$component" "$cmd"
+      exit $?
+    fi
+    case "$cmd" in
+      start) cmd_up ;;
+      stop) cmd_down ;;
+      status) cmd_status ;;
+    esac
+    ;;
   -h|--help) usage ;;
   *)
-    error "Unknown command: $cmd (expected: up|status|down|sync)"
+    error "Unknown command: $cmd (expected: start|stop|status)"
     usage
     exit 1
     ;;

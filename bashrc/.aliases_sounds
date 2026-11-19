@@ -1,0 +1,22 @@
+# --- System Sound Aliases ---
+
+# Notifications & Alerts
+alias sbell='(paplay /usr/share/sounds/freedesktop/stereo/bell.oga >/dev/null 2>&1 &)'
+alias salert='(paplay /usr/share/sounds/freedesktop/stereo/complete.oga >/dev/null 2>&1 &)'
+alias swarning='(paplay /usr/share/sounds/freedesktop/stereo/dialog-warning.oga >/dev/null 2>&1 &)'
+alias serror='(paplay /usr/share/sounds/freedesktop/stereo/dialog-warning.oga >/dev/null 2>&1 &)'
+alias sinfo='(paplay /usr/share/sounds/freedesktop/stereo/dialog-information.oga >/dev/null 2>&1 &)'
+
+# Actions
+alias sphoto='(paplay /usr/share/sounds/freedesktop/stereo/camera-shutter.oga >/dev/null 2>&1 &)'
+alias strash='(paplay /usr/share/sounds/freedesktop/stereo/trash-empty.oga >/dev/null 2>&1 &)'
+alias smsg='(paplay /usr/share/sounds/freedesktop/stereo/message.oga >/dev/null 2>&1 &)'
+alias slogin='(paplay /usr/share/sounds/freedesktop/stereo/service-login.oga >/dev/null 2>&1 &)'
+alias slogout='(paplay /usr/share/sounds/freedesktop/stereo/service-logout.oga >/dev/null 2>&1 &)'
+
+# Hardware/System
+alias splug='(paplay /usr/share/sounds/freedesktop/stereo/device-added.oga >/dev/null 2>&1 &)'
+alias sunplug='(paplay /usr/share/sounds/freedesktop/stereo/device-removed.oga >/dev/null 2>&1 &)'
+
+# Fun / Long sounds (use with caution!)
+alias salarm='(paplay /usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga >/dev/null 2>&1 &)'

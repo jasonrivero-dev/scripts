@@ -1,4 +1,9 @@
 PREREQS_REQUIRED_TOOLS=(docker node npm dotnet git-lfs python3 gh)
+PREREQS_REQUIRED_IMAGES=(
+  "opensearchproject/opensearch:2.19.0"
+  "postgres:11-alpine"
+  "cgr.dev/chainguard/minio@sha256:68aab277f9748c7c3eb85f178744adba1655c8e33a86987b22d2879ca507c332"
+)
 PREREQS_MAX_MAP_COUNT_MIN=262144
 PREREQS_MAX_USER_WATCHES_MIN=524288
 PREREQS_MAX_USER_INSTANCES_MIN=1024
@@ -30,6 +35,18 @@ prereqs_check() {
     return 2
   fi
   log "All required tools present: ${PREREQS_REQUIRED_TOOLS[*]}, docker compose"
+
+  local image
+  for image in "${PREREQS_REQUIRED_IMAGES[@]}"; do
+    if docker image inspect "$image" >/dev/null 2>&1; then
+      log "already present: $image"
+    elif docker pull "$image" >/dev/null 2>&1; then
+      log "pulled: $image"
+    else
+      error "Could not pull required image: $image"
+      return 2
+    fi
+  done
 
   local current
   current="$(_prereqs_max_map_count)"

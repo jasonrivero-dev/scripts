@@ -12,4 +12,9 @@ luna/.cache/
 novhub-local-stack/.cache/
 novhub-local-stack/.state/
 novhub-local-stack/.venv/
+novhub-local-stack/perf-targets.env
+novhub-local-stack/perf-targets.*.env
+novhub-local-stack/cloud-tunnel-ports.env
+novhub-local-stack/cloud-env.env
 .ai-template/*.local
+bashrc/.keys
