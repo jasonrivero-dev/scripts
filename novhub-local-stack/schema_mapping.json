@@ -1,0 +1,914 @@
+[
+  {
+    "Index": 0,
+    "Column": "arc_detect",
+    "Type": "bool",
+    "Row 0": true,
+    "Row 1": true,
+    "Probable Range": "true / false (mostly true)"
+  },
+  {
+    "Index": 1,
+    "Column": "arc_detect_fake",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (mostly false)"
+  },
+  {
+    "Index": 2,
+    "Column": "arc_time",
+    "Type": "u32",
+    "Row 0": 97000,
+    "Row 1": 97010,
+    "Probable Range": "0 to 4,294,967,295 ms (+10/row)"
+  },
+  {
+    "Index": 3,
+    "Column": "autonomy_dist_x_raw",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "-500 to 500"
+  },
+  {
+    "Index": 4,
+    "Column": "autonomy_dist_y_raw",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "-500 to 500"
+  },
+  {
+    "Index": 5,
+    "Column": "autonomy_gap_approach",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 6,
+    "Column": "autonomy_move_left_robot",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 7,
+    "Column": "autonomy_move_right_robot",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 8,
+    "Column": "autonomy_overflow_left",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 100"
+  },
+  {
+    "Index": 9,
+    "Column": "autonomy_overflow_right",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 100"
+  },
+  {
+    "Index": 10,
+    "Column": "autonomy_puddle_led_length",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 100"
+  },
+  {
+    "Index": 11,
+    "Column": "autonomy_puddle_offset_mm",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-3.0 to 3.0 mm"
+  },
+  {
+    "Index": 12,
+    "Column": "autonomy_puddle_width_mm",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 15.0 mm"
+  },
+  {
+    "Index": 13,
+    "Column": "autonomy_root_opening_mm",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 6.0 mm"
+  },
+  {
+    "Index": 14,
+    "Column": "autonomy_stringer_both",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 15,
+    "Column": "autonomy_stringer_left",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 16,
+    "Column": "autonomy_stringer_right",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 17,
+    "Column": "autonomy_tack_approach",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 18,
+    "Column": "autonomy_tack_fusion",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 19,
+    "Column": "camera_cooler_status",
+    "Type": "bool",
+    "Row 0": true,
+    "Row 1": true,
+    "Probable Range": "true / false (mostly true)"
+  },
+  {
+    "Index": 20,
+    "Column": "camera_error",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (mostly false)"
+  },
+  {
+    "Index": 21,
+    "Column": "camera_temp",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 60.0 \u00b0C"
+  },
+  {
+    "Index": 22,
+    "Column": "celeste_autonomy_license",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (static)"
+  },
+  {
+    "Index": 23,
+    "Column": "celeste_sequential_counter",
+    "Type": "u32",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 4,294,967,295 (+1/row)"
+  },
+  {
+    "Index": 24,
+    "Column": "command_speed",
+    "Type": "f32",
+    "Row 0": 13.0,
+    "Row 1": 13.0,
+    "Probable Range": "5.0 to 40.0 ipm"
+  },
+  {
+    "Index": 25,
+    "Column": "command_voltage",
+    "Type": "f32",
+    "Row 0": 10.0,
+    "Row 1": 10.0,
+    "Probable Range": "10.0 to 35.0 V"
+  },
+  {
+    "Index": 26,
+    "Column": "command_weave_amp",
+    "Type": "f32",
+    "Row 0": 1.0,
+    "Row 1": 1.0,
+    "Probable Range": "0.0 to 5.0 mm"
+  },
+  {
+    "Index": 27,
+    "Column": "command_weave_frequency",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 5.0 Hz"
+  },
+  {
+    "Index": 28,
+    "Column": "command_wfs",
+    "Type": "i16",
+    "Row 0": 399,
+    "Row 1": 399,
+    "Probable Range": "100 to 700 ipm"
+  },
+  {
+    "Index": 29,
+    "Column": "dev_version",
+    "Type": "u16",
+    "Row 0": 1,
+    "Row 1": 1,
+    "Probable Range": "0 to 10 (static)"
+  },
+  {
+    "Index": 30,
+    "Column": "gas_flow",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 31,
+    "Column": "gas_type",
+    "Type": "i16",
+    "Row 0": 3,
+    "Row 1": 3,
+    "Probable Range": "0 to 10 (enum, static)"
+  },
+  {
+    "Index": 32,
+    "Column": "heat_input",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 4.0 kJ/mm"
+  },
+  {
+    "Index": 33,
+    "Column": "j1_deg",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-180.0 to 180.0 deg"
+  },
+  {
+    "Index": 34,
+    "Column": "j2_deg",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-180.0 to 180.0 deg"
+  },
+  {
+    "Index": 35,
+    "Column": "j3_deg",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-180.0 to 180.0 deg"
+  },
+  {
+    "Index": 36,
+    "Column": "j4_deg",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-180.0 to 180.0 deg"
+  },
+  {
+    "Index": 37,
+    "Column": "j5_deg",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-180.0 to 180.0 deg"
+  },
+  {
+    "Index": 38,
+    "Column": "j6_deg",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-180.0 to 180.0 deg"
+  },
+  {
+    "Index": 39,
+    "Column": "job_id",
+    "Type": "String",
+    "Row 0": "NA",
+    "Row 1": "NA",
+    "Probable Range": "Static string (e.g. \"NA\")"
+  },
+  {
+    "Index": 40,
+    "Column": "joint_type",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 10 (enum, static)"
+  },
+  {
+    "Index": 41,
+    "Column": "left_dwell",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 1.0 s"
+  },
+  {
+    "Index": 42,
+    "Column": "live_amps",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 350.0 A"
+  },
+  {
+    "Index": 43,
+    "Column": "live_travel_speed",
+    "Type": "f32",
+    "Row 0": 13.0,
+    "Row 1": 13.0,
+    "Probable Range": "5.0 to 40.0 ipm"
+  },
+  {
+    "Index": 44,
+    "Column": "live_trim",
+    "Type": "f32",
+    "Row 0": 1.0,
+    "Row 1": 1.0,
+    "Probable Range": "0.5 to 1.5"
+  },
+  {
+    "Index": 45,
+    "Column": "live_voltage",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 35.0 V"
+  },
+  {
+    "Index": 46,
+    "Column": "live_weave_amplitude",
+    "Type": "f32",
+    "Row 0": 1.0,
+    "Row 1": 1.0,
+    "Probable Range": "0.0 to 5.0 mm"
+  },
+  {
+    "Index": 47,
+    "Column": "live_weave_frequency",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 5.0 Hz"
+  },
+  {
+    "Index": 48,
+    "Column": "live_wfs",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 700 ipm"
+  },
+  {
+    "Index": 49,
+    "Column": "major_version",
+    "Type": "u8",
+    "Row 0": 2,
+    "Row 1": 2,
+    "Probable Range": "0 to 10 (static)"
+  },
+  {
+    "Index": 50,
+    "Column": "material_thickness",
+    "Type": "i16",
+    "Row 0": 6,
+    "Row 1": 6,
+    "Probable Range": "1 to 50 mm (static)"
+  },
+  {
+    "Index": 51,
+    "Column": "max_gap_measurement",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 6.0 mm"
+  },
+  {
+    "Index": 52,
+    "Column": "miller_weave_enable",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 53,
+    "Column": "minor_version",
+    "Type": "u8",
+    "Row 0": 3,
+    "Row 1": 3,
+    "Probable Range": "0 to 20 (static)"
+  },
+  {
+    "Index": 54,
+    "Column": "novai_mode",
+    "Type": "i16",
+    "Row 0": 1,
+    "Row 1": 1,
+    "Probable Range": "0 to 10 (mode enum)"
+  },
+  {
+    "Index": 55,
+    "Column": "operator_name",
+    "Type": "String",
+    "Row 0": "test-operator",
+    "Row 1": "test-operator",
+    "Probable Range": "Static string"
+  },
+  {
+    "Index": 56,
+    "Column": "part_id",
+    "Type": "String",
+    "Row 0": "NA",
+    "Row 1": "NA",
+    "Probable Range": "Static string (e.g. \"NA\")"
+  },
+  {
+    "Index": 57,
+    "Column": "pendant_joy_stick_down",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 58,
+    "Column": "pendant_joy_stick_left",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 59,
+    "Column": "pendant_joy_stick_right",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 60,
+    "Column": "pendant_joy_stick_up",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 61,
+    "Column": "pendant_tack_fusion",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 62,
+    "Column": "pendant_travel_speed_decrease",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 63,
+    "Column": "pendant_travel_speed_increase",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 64,
+    "Column": "pendant_trim_decrease",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 65,
+    "Column": "pendant_trim_increase",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 66,
+    "Column": "pendant_weave_amp_decrease",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 67,
+    "Column": "pendant_weave_amp_increase",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 68,
+    "Column": "pendant_wfs_decrease",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 69,
+    "Column": "pendant_wfs_increase",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false (sparse true)"
+  },
+  {
+    "Index": 70,
+    "Column": "plc_major_version",
+    "Type": "u8",
+    "Row 0": 3,
+    "Row 1": 3,
+    "Probable Range": "0 to 10 (static)"
+  },
+  {
+    "Index": 71,
+    "Column": "plc_minor_version",
+    "Type": "u8",
+    "Row 0": 1,
+    "Row 1": 1,
+    "Probable Range": "0 to 20 (static)"
+  },
+  {
+    "Index": 72,
+    "Column": "plc_robot_comms_error",
+    "Type": "bool",
+    "Row 0": true,
+    "Row 1": true,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 73,
+    "Column": "plc_time",
+    "Type": "u64",
+    "Row 0": 21000000,
+    "Row 1": 21000010,
+    "Probable Range": "0 to 2^64-1 ms (+10/row)"
+  },
+  {
+    "Index": 74,
+    "Column": "power_source_type",
+    "Type": "u8",
+    "Row 0": 1,
+    "Row 1": 1,
+    "Probable Range": "0 to 10 (enum, static)"
+  },
+  {
+    "Index": 75,
+    "Column": "prescan_active",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 76,
+    "Column": "prescan_at_pos_a",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 77,
+    "Column": "prescan_at_pos_b",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 78,
+    "Column": "prescan_gap_measurement",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 6.0 mm"
+  },
+  {
+    "Index": 79,
+    "Column": "recipe_tack_travel_speed",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 40.0 ipm (static)"
+  },
+  {
+    "Index": 80,
+    "Column": "recipe_tack_trim",
+    "Type": "f32",
+    "Row 0": 0.1,
+    "Row 1": 0.1,
+    "Probable Range": "0.0 to 2.0 (static)"
+  },
+  {
+    "Index": 81,
+    "Column": "recipe_tack_weave_amplitude",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 5.0 mm (static)"
+  },
+  {
+    "Index": 82,
+    "Column": "recipe_tack_wfs",
+    "Type": "i16",
+    "Row 0": 300,
+    "Row 1": 300,
+    "Probable Range": "100 to 700 ipm (static)"
+  },
+  {
+    "Index": 83,
+    "Column": "recipe_travel_speed",
+    "Type": "f32",
+    "Row 0": 15.0,
+    "Row 1": 15.0,
+    "Probable Range": "5.0 to 40.0 ipm (static)"
+  },
+  {
+    "Index": 84,
+    "Column": "recipe_trim",
+    "Type": "f32",
+    "Row 0": 1.0,
+    "Row 1": 1.0,
+    "Probable Range": "0.5 to 1.5 (static)"
+  },
+  {
+    "Index": 85,
+    "Column": "recipe_weave_amplitude",
+    "Type": "f32",
+    "Row 0": 0.7,
+    "Row 1": 0.7,
+    "Probable Range": "0.0 to 5.0 mm (static)"
+  },
+  {
+    "Index": 86,
+    "Column": "recipe_weld_mode",
+    "Type": "i16",
+    "Row 0": 608,
+    "Row 1": 608,
+    "Probable Range": "1 to 999 (mode code, static)"
+  },
+  {
+    "Index": 87,
+    "Column": "recipe_wfs",
+    "Type": "i16",
+    "Row 0": 399,
+    "Row 1": 399,
+    "Probable Range": "100 to 700 ipm (static)"
+  },
+  {
+    "Index": 88,
+    "Column": "right_dwell",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "0.0 to 1.0 s"
+  },
+  {
+    "Index": 89,
+    "Column": "robot_error_codes",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 (healthy) or 1 to 9999"
+  },
+  {
+    "Index": 90,
+    "Column": "robot_in_error_code",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 (healthy) or 1 to 9999"
+  },
+  {
+    "Index": 91,
+    "Column": "robot_in_facility_code",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 999"
+  },
+  {
+    "Index": 92,
+    "Column": "robot_type_used",
+    "Type": "u8",
+    "Row 0": 2,
+    "Row 1": 2,
+    "Probable Range": "0 to 10 (enum, static)"
+  },
+  {
+    "Index": 93,
+    "Column": "run_id",
+    "Type": "String",
+    "Row 0": "99999999",
+    "Row 1": "99999999",
+    "Probable Range": "Static ID string"
+  },
+  {
+    "Index": 94,
+    "Column": "seam_tracking_bias",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-3.0 to 3.0 mm"
+  },
+  {
+    "Index": 95,
+    "Column": "seam_tracking_gap_offset",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-3.0 to 3.0 mm"
+  },
+  {
+    "Index": 96,
+    "Column": "serial_id",
+    "Type": "String",
+    "Row 0": "test-serial-v2-3",
+    "Row 1": "test-serial-v2-3",
+    "Probable Range": "Static ID string"
+  },
+  {
+    "Index": 97,
+    "Column": "stick_out",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 30 mm"
+  },
+  {
+    "Index": 98,
+    "Column": "tack_fusion_state",
+    "Type": "bool",
+    "Row 0": false,
+    "Row 1": false,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 99,
+    "Column": "target_puddle_width_mm",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "4.0 to 15.0 mm"
+  },
+  {
+    "Index": 100,
+    "Column": "tcp_rx_pos",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-180.0 to 180.0 deg"
+  },
+  {
+    "Index": 101,
+    "Column": "tcp_ry_pos",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-180.0 to 180.0 deg"
+  },
+  {
+    "Index": 102,
+    "Column": "tcp_rz_pos",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-180.0 to 180.0 deg"
+  },
+  {
+    "Index": 103,
+    "Column": "tcp_x_pos",
+    "Type": "f32",
+    "Row 0": 1200.0,
+    "Row 1": 1200.0,
+    "Probable Range": "-2500.0 to 2500.0 mm"
+  },
+  {
+    "Index": 104,
+    "Column": "tcp_y_pos",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-2500.0 to 2500.0 mm"
+  },
+  {
+    "Index": 105,
+    "Column": "tcp_z_pos",
+    "Type": "f32",
+    "Row 0": 0.0,
+    "Row 1": 0.0,
+    "Probable Range": "-2500.0 to 2500.0 mm"
+  },
+  {
+    "Index": 106,
+    "Column": "timestamp",
+    "Type": "String",
+    "Row 0": "2026-01-01T12:00:00.000Z",
+    "Row 1": "2026-01-01T12:00:00.010Z",
+    "Probable Range": "ISO-8601 UTC (+10 ms/row)"
+  },
+  {
+    "Index": 107,
+    "Column": "user_inputs",
+    "Type": "Vec<UserInput>",
+    "Row 0": [],
+    "Row 1": [],
+    "Probable Range": "[] or event array"
+  },
+  {
+    "Index": 108,
+    "Column": "weld_id",
+    "Type": "String",
+    "Row 0": "test-weld-v2-3",
+    "Row 1": "test-weld-v2-3",
+    "Probable Range": "Static ID string"
+  },
+  {
+    "Index": 109,
+    "Column": "weld_position",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 6 (1G\u20136G enum, static)"
+  },
+  {
+    "Index": 110,
+    "Column": "weld_started",
+    "Type": "bool",
+    "Row 0": true,
+    "Row 1": true,
+    "Probable Range": "true / false"
+  },
+  {
+    "Index": 111,
+    "Column": "wire_size",
+    "Type": "i16",
+    "Row 0": 0,
+    "Row 1": 0,
+    "Probable Range": "0 to 10 (enum, static)"
+  },
+  {
+    "Index": 112,
+    "Column": "wire_type",
+    "Type": "i16",
+    "Row 0": 1,
+    "Row 1": 1,
+    "Probable Range": "0 to 10 (enum, static)"
+  },
+  {
+    "Index": 113,
+    "Column": "wireless_pendant_present",
+    "Type": "bool",
+    "Row 0": true,
+    "Row 1": true,
+    "Probable Range": "true / false"
+  }
+]

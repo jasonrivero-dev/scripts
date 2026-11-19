@@ -14,10 +14,13 @@ calculated does not match" on a real dev run).
 import argparse
 import datetime
 import json
+import math
 import os
+import random
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 import psycopg2
@@ -55,6 +58,21 @@ RUN_ID_BASE = 90000000       # far above any real run_id - also the --remove flo
                               # left off - see do_ingest's already-ingested refusal.
 RUN_SPACING_S = POINTS_PER_RUN + 300   # perfload's own formula (cmd/perfload/main.go buildPayload)
 SYNTHETIC_JOB_ID_FMT = "PERF-ING-JOB-{robot_id}"   # perfload's own naming (cmd/perfload/main.go)
+RANGE_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema_mapping.json")
+FEEDBACK_FIELDS = (
+    "autonomy_dist_x_raw",
+    "autonomy_dist_y_raw",
+    "camera_temp",
+    "live_amps",
+    "live_travel_speed",
+    "live_trim",
+    "live_voltage",
+    "live_weave_amplitude",
+    "live_weave_frequency",
+    "live_wfs",
+    "max_gap_measurement",
+    "prescan_gap_measurement",
+)
 
 REQUIRED = [ENV, SECRETS_DIR, DB_LOCAL_PORT, ES_LOOPBACK, AWS_REGION, AWS_PROFILE,
             ROBOT_ID, INGESTER_REPO, PERF_RANK_SCRIPT, LOG_DIR]
@@ -226,6 +244,177 @@ Writes:
 """)
 
 
+def read_json_file(path, label):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"invalid {label} JSON at {path}: {e}") from e
+    except OSError as e:
+        raise ValueError(f"could not read {label} at {path}: {e}") from e
+
+
+def load_range_map(path=RANGE_MAP_PATH):
+    entries = read_json_file(path, "range map")
+    if not isinstance(entries, list):
+        raise ValueError(f"range map at {path} must be a JSON array")
+
+    by_column = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("Column"), str):
+            raise ValueError(f"range map at {path} contains an invalid entry")
+        column = entry["Column"]
+        if column in by_column:
+            raise ValueError(f"range map at {path} contains duplicate column {column!r}")
+        by_column[column] = entry
+    return by_column
+
+
+def mapping_entry(range_map, field, schema_type):
+    entry = range_map.get(field)
+    if entry is None:
+        raise ValueError(f"range map has no entry for {field}")
+    if entry.get("Type") != schema_type:
+        raise ValueError(
+            f"range-map type for {field} is {entry.get('Type')!r}, "
+            f"but the template schema says {schema_type!r}"
+        )
+    return entry
+
+
+def numeric_bounds(range_text, field):
+    if not isinstance(range_text, str):
+        raise ValueError(f"range for {field} must be text")
+    match = re.match(
+        r"\s*(-?\d+(?:\.\d+)?)\s+to\s+(-?\d+(?:\.\d+)?)\b",
+        range_text.replace(",", ""),
+    )
+    if not match:
+        raise ValueError(f"range for {field} is not a numeric minimum-to-maximum range")
+    low, high = map(float, match.groups())
+    if not math.isfinite(low) or not math.isfinite(high) or low >= high:
+        raise ValueError(f"range for {field} has invalid bounds")
+    return low, high
+
+
+def sample_values(field, schema_type, range_text, count, rng):
+    low, high = numeric_bounds(range_text, field)
+    if re.fullmatch(r"[iu]\d+", schema_type):
+        low_int, high_int = math.ceil(low), math.floor(high)
+        if low_int >= high_int:
+            raise ValueError(f"integer range for {field} cannot provide distinct values")
+        values = [rng.randint(low_int, high_int) for _ in range(count)]
+        if len(set(values)) < 2:
+            values[1] = high_int if values[0] != high_int else low_int
+        return values
+    if schema_type in ("f32", "f64"):
+        values = [rng.uniform(low, high) for _ in range(count)]
+        if len(set(values)) < 2:
+            values[1] = high if values[0] != high else low
+        return values
+    raise ValueError(f"unsupported measurement type {schema_type!r} for {field}")
+
+
+def row_increment(range_text, field):
+    if not isinstance(range_text, str):
+        raise ValueError(f"range for {field} must be text")
+    match = re.search(r"\(\s*\+\s*(\d+(?:\.\d+)?)\s*(?:ms)?\s*/row\s*\)", range_text, re.I)
+    if not match:
+        raise ValueError(f"range map does not define a per-row increment for {field}")
+    return float(match.group(1))
+
+
+def utc_timestamp(value, field):
+    if not isinstance(value, str):
+        raise ValueError(f"template value for {field} must be an ISO-8601 string")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.datetime.fromisoformat(normalized)
+    except ValueError as e:
+        raise ValueError(f"template value for {field} is not a valid ISO-8601 timestamp") from e
+    if parsed.tzinfo is None:
+        raise ValueError(f"template value for {field} must include a timezone")
+    return parsed.astimezone(datetime.timezone.utc)
+
+
+def build_varied_template(template, range_map, row_count=POINTS_PER_RUN, rng=None):
+    if row_count < 2:
+        raise ValueError("at least two template rows are required")
+    if not isinstance(template, dict) or not isinstance(template.get("schema"), dict):
+        raise ValueError("Hermit template must contain a schema object")
+    schema = template["schema"]
+    source_rows = template.get("values")
+    if not isinstance(source_rows, list) or not source_rows:
+        raise ValueError("Hermit template must contain at least one values row")
+    field_indexes = {field: index for index, field in enumerate(schema)}
+    for row_number, row in enumerate(source_rows):
+        if not isinstance(row, list) or len(row) != len(field_indexes):
+            raise ValueError(f"Hermit template values row {row_number} does not match its schema")
+
+    rng = rng or random.SystemRandom()
+    generated_values = {}
+    for field in FEEDBACK_FIELDS:
+        if field not in field_indexes:
+            raise ValueError(f"Hermit template schema is missing feedback field {field}")
+        entry = mapping_entry(range_map, field, schema[field])
+        generated_values[field] = sample_values(
+            field, schema[field], entry.get("Probable Range"), row_count, rng
+        )
+
+    sequenced_values = {}
+    for field in ("arc_time", "plc_time", "timestamp"):
+        if field not in field_indexes:
+            raise ValueError(f"Hermit template schema is missing time field {field}")
+        entry = mapping_entry(range_map, field, schema[field])
+        increment = row_increment(entry.get("Probable Range", ""), field)
+        if field == "timestamp":
+            start = utc_timestamp(source_rows[0][field_indexes[field]], field)
+            sequenced_values[field] = [
+                (start + datetime.timedelta(milliseconds=increment * index))
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+                for index in range(row_count)
+            ]
+        else:
+            base_value = source_rows[0][field_indexes[field]]
+            if isinstance(base_value, bool) or not isinstance(base_value, int):
+                raise ValueError(f"template value for {field} must be an integer")
+            if not increment.is_integer():
+                raise ValueError(f"row increment for {field} must be an integer")
+            sequenced_values[field] = [
+                base_value + int(increment) * index for index in range(row_count)
+            ]
+            if schema[field].startswith("u"):
+                max_value = (1 << int(schema[field][1:])) - 1
+                if base_value < 0 or sequenced_values[field][-1] > max_value:
+                    raise ValueError(f"sequential values for {field} exceed {schema[field]} bounds")
+
+    rows = []
+    for index in range(row_count):
+        row = list(source_rows[index % len(source_rows)])
+        for field, values in generated_values.items():
+            row[field_indexes[field]] = values[index]
+        for field, values in sequenced_values.items():
+            row[field_indexes[field]] = values[index]
+        rows.append(row)
+
+    varied = dict(template)
+    varied["values"] = rows
+    return varied
+
+
+def write_private_template(template, directory):
+    path = os.path.join(directory, "hermit-template.json")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(template, f, indent=2)
+            f.write("\n")
+    except OSError as e:
+        raise ValueError(f"could not write private temporary template: {e}") from e
+    return path
+
+
 def run_ingester_tee_scrubbed(cmd, cwd, env):
     """Runs the real ingester, scrubbing every line of its combined stdout+stderr before it's
     shown or stored anywhere - confirmed for real that a signature-mismatch 403 can echo back
@@ -354,20 +543,32 @@ def do_ingest(args, es_host, index, db_kv):
     if not args.template:
         sys.exit("--template <path to a real Hermit V2 sample> is required for a real run")
 
+    try:
+        template = read_json_file(args.template, "Hermit template")
+        range_map = load_range_map()
+        varied_template = build_varied_template(template, range_map)
+    except ValueError as e:
+        sys.exit(f"could not prepare varied Hermit template: {scrub_sensitive(str(e))}")
+
     raw_before = raw_robot_doc_count(es_host, index)
 
-    child_env = build_child_env(es_host, index, db_kv)
-    cmd = ["go", "run", "./cmd/perfload",
-           "-template", args.template,
-           "-robot-id-start", str(ROBOT_ID), "-robot-count", "1",
-           "-runs-per-robot", str(n_runs), "-points-per-run", str(POINTS_PER_RUN),
-           "-run-id-base", str(RUN_ID_BASE)]
-    print(f"[INFO] running: go run ./cmd/perfload -robot-id-start {ROBOT_ID} -robot-count 1 "
-          f"-runs-per-robot {n_runs} -points-per-run {POINTS_PER_RUN} -run-id-base {RUN_ID_BASE} "
-          f"(cwd={INGESTER_REPO}) - credentials/DSN are set only on this subprocess's own "
-          f"environment, never printed, never in argv. Combined output is scrubbed and logged "
-          f"below.", file=sys.stderr)
-    returncode, log_path = run_ingester_tee_scrubbed(cmd, INGESTER_REPO, child_env)
+    with tempfile.TemporaryDirectory(prefix="cloud-ingest-") as temp_dir:
+        try:
+            temp_template_path = write_private_template(varied_template, temp_dir)
+        except ValueError as e:
+            sys.exit(str(e))
+        child_env = build_child_env(es_host, index, db_kv)
+        cmd = ["go", "run", "./cmd/perfload",
+               "-template", temp_template_path,
+               "-robot-id-start", str(ROBOT_ID), "-robot-count", "1",
+               "-runs-per-robot", str(n_runs), "-points-per-run", str(POINTS_PER_RUN),
+               "-run-id-base", str(RUN_ID_BASE)]
+        print(f"[INFO] running: go run ./cmd/perfload -robot-id-start {ROBOT_ID} -robot-count 1 "
+              f"-runs-per-robot {n_runs} -points-per-run {POINTS_PER_RUN} -run-id-base {RUN_ID_BASE} "
+              f"(cwd={INGESTER_REPO}) - credentials/DSN are set only on this subprocess's own "
+              f"environment, never printed, never in argv. Combined output is scrubbed and logged "
+              f"below.", file=sys.stderr)
+        returncode, log_path = run_ingester_tee_scrubbed(cmd, INGESTER_REPO, child_env)
     print(f"\n[INFO] full (scrubbed) ingester log: {log_path}")
     if returncode != 0:
         sys.exit(f"ingester exited {returncode} - see {log_path}")
