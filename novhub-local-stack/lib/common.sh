@@ -23,6 +23,44 @@ listening() {
   ss -ltnu 2>/dev/null | awk '{print $5}' | grep -qE ":${port}$"
 }
 
+# True if anything is already bound to this exact address:port, OR to a wildcard bind
+# (*/0.0.0.0) on that port - a wildcard bind occupies every address, including this one.
+# Never reports which process/user owns it - that needs root (lsof -i) and isn't this
+# check's business; the caller only needs to know the port is unavailable.
+listening_on_address() {
+  local addr="$1" port="$2"
+  local addr_re="${addr//./\\.}"
+  ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "^(\*|0\.0\.0\.0|${addr_re}):${port}\$"
+}
+
+# Returns the pid of a process listening on addr:port, if we have permission to see it (our
+# own-user processes, no root needed) - prints nothing if it can't be determined. Used only to
+# name a stale leftover process in an error message, never to kill anything.
+listener_pid_info() {
+  local addr="$1" port="$2"
+  local addr_re="${addr//./\\.}"
+  ss -ltnp 2>/dev/null | awk -v re="^(\\*|0\\.0\\.0\\.0|${addr_re}):${port}\$" '$4 ~ re' \
+    | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2
+}
+
+# Refuses with one line if addr:port is already bound to something other than our own tracked
+# process. If the pid is visible to us (own-user socket) and its command line references
+# ssh_cfg_path, names it explicitly as a leftover ssh process from this env's own config -
+# the caller decides whether to stop it by hand; this never kills anything itself.
+refuse_if_port_taken() {
+  local addr="$1" port="$2" label="$3" ssh_cfg_path="$4"
+  local pid
+  pid="$(listener_pid_info "$addr" "$port")"
+  if [ -n "$pid" ] && ps -p "$pid" -o args= 2>/dev/null | grep -qF "$ssh_cfg_path"; then
+    error "${addr}:${port} is already in use by pid $pid - an ssh process matching this env's ssh config that isn't tracked in our pidfile (likely left over from an earlier run) - refusing to start the $label; not killing it, stop it yourself if it's stale and retry"
+  elif [ -n "$pid" ]; then
+    error "${addr}:${port} is already in use (pid $pid) - refusing to start the $label"
+  else
+    error "${addr}:${port} is already in use - refusing to start the $label"
+  fi
+  exit 1
+}
+
 is_running() {
   local pidfile="$STATE_DIR/$1.pid"
   [ -f "$pidfile" ] || return 1
@@ -185,6 +223,22 @@ normalize_host() {
   fi
 }
 
+# Extracts an explicit :port from a secrets-file host value (after stripping scheme/path,
+# same stripping normalize_host does), if the value actually carries one - prints nothing
+# otherwise. Callers supply their own default when this is empty; never assume a secrets
+# file's separate 'port' key is the same thing; the OpenSearch secrets file's 'port' (9200)
+# is a confirmed example of a DIFFERENT value, not the TLS endpoint port (always 443) - see
+# the HUB-106 real-run report of a LocalForward built from it timing out.
+url_port() {
+  local raw="$1"
+  local h="${raw#*://}"
+  h="${h%%/*}"
+  if [[ "$h" == *:* ]]; then
+    local p="${h##*:}"
+    [[ "$p" =~ ^[0-9]+$ ]] && echo "$p"
+  fi
+}
+
 require_0600() {
   local file="$1" label="$2"
   [ -f "$file" ] || { error "missing: $file"; exit 1; }
@@ -192,6 +246,20 @@ require_0600() {
   mode="$(stat -c '%a' "$file" 2>/dev/null || stat -f '%OLp' "$file")"
   if [ "$mode" != "600" ]; then
     error "$label $file is mode $mode, not 0600 - refusing"
+    exit 1
+  fi
+}
+
+# Same as require_0600, plus ownership: about to be handed to `sudo`, so a file that isn't
+# both 0600 AND owned by the person running this (not root, not anyone else) could mean it was
+# tampered with - sudo would then run attacker-controlled config/key material as root.
+require_owner_and_0600() {
+  local file="$1" label="$2"
+  require_0600 "$file" "$label"
+  local owner
+  owner="$(stat -c '%U' "$file" 2>/dev/null || stat -f '%Su' "$file")"
+  if [ "$owner" != "$(whoami)" ]; then
+    error "$label $file is owned by '$owner', not you - refusing to sudo with it"
     exit 1
   fi
 }

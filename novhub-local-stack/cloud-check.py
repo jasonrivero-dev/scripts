@@ -16,17 +16,17 @@ import requests
 # comment for why verify=False is correct here) - importing it before any request() call,
 # as below, is what makes that take effect for this file's own requests too.
 from cloud_common import (
-    normalize_host, read_kv, require, reduce_arn, scrub_arns, sso_login_hint,
+    normalize_host, read_kv, require, reduce_arn, scrub_sensitive, sso_login_hint,
     sigv4_sign, get_caller_identity,
 )
 
 ENV = os.environ.get("CLOUD_CHECK_ENV")
 DB_LOCAL_PORT = os.environ.get("CLOUD_CHECK_DB_LOCAL_PORT")
-ES_LOCAL_PORT = os.environ.get("CLOUD_CHECK_ES_LOCAL_PORT")
+ES_LOOPBACK = os.environ.get("CLOUD_CHECK_ES_LOOPBACK")
 SECRETS_DIR = os.environ.get("CLOUD_CHECK_SECRETS_DIR")
 VIA_HOSTNAME = os.environ.get("CLOUD_CHECK_VIA_HOSTNAME") == "1"
 
-if not all([ENV, DB_LOCAL_PORT, ES_LOCAL_PORT, SECRETS_DIR]):
+if not all([ENV, DB_LOCAL_PORT, ES_LOOPBACK, SECRETS_DIR]):
     sys.exit("missing env vars - run this via cloud-check.sh, not directly")
 
 
@@ -55,19 +55,27 @@ def check_db():
 
 
 def es_base_url(es_host):
+    # No port, ever - see cloud_common.sigv4_request's own docstring for why: a tunnel on a
+    # high port makes the signed Host header carry that port, which never matches what AWS
+    # recomputes server-side (the actual cause of the dev ingest's 403s). The OpenSearch
+    # forward is pinned to port 443 on this env's own loopback address for exactly this
+    # reason (cloud-tunnel.sh) - this now exercises precisely what the Go SDK/NovApi do.
     if VIA_HOSTNAME:
-        return f"https://{es_host}:{ES_LOCAL_PORT}"
-    return f"https://127.0.0.1:{ES_LOCAL_PORT}"
+        return f"https://{es_host}"
+    return f"https://{ES_LOOPBACK}"
 
 
 def describe_failed(label, resp):
-    """AWS/OpenSearch error bodies are plain diagnostic JSON (type, message) - they never
-    echo back credentials, so it's safe to show verbatim once any embedded ARN is reduced.
-    This is what lets the owner tell a 403 "identity not allowed by the domain's access
-    policy" (body names the denied action, e.g. "is not authorized to perform") apart from a
-    signature problem (body says something like "SignatureDoesNotMatch" / "does not match") -
-    this script doesn't guess which one it is, it just shows AWS's own message."""
-    body = scrub_arns(resp.text.strip())
+    """AWS/OpenSearch error bodies are plain diagnostic JSON (type, message) - usually safe to
+    show verbatim, but NOT always: confirmed for real that a signature-mismatch 403 can echo
+    back x-amz-security-token (a real, usable session token) as part of the canonical
+    request/string-to-sign it computed. scrub_sensitive handles that and any embedded ARN
+    (session names can carry a username/email) before this is ever shown or stored. This is
+    what lets the owner tell a 403 "identity not allowed by the domain's access policy" (body
+    names the denied action, e.g. "is not authorized to perform") apart from a signature
+    problem (body says something like "SignatureDoesNotMatch" / "does not match") - this
+    script doesn't guess which one it is, it just shows AWS's own (scrubbed) message."""
+    body = scrub_sensitive(resp.text.strip())
     if len(body) > 500:
         body = body[:500] + "...(truncated)"
     return f"{label}={resp.status_code} body={body}"

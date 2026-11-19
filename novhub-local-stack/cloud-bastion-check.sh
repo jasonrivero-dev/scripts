@@ -6,12 +6,17 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
 Usage: cloud-bastion-check.sh --env dev|test
 
 HUB-106: a plain TCP reachability check FROM the cat-dev bastion to one
-environment's DB (port 5432) and OpenSearch (port 443) hosts, using
-exec_ubuntu (bashrc/.functions) - never a bare ssh/nc command. Hosts are
-read from .state/secrets/novai-<env>/{DB,OPENSEARCH}.secrets at run time
-and never printed by this script (exec_ubuntu's own "Running on ..."
-line does echo the command it sends, which includes the host - that's
-your own terminal showing your own data, not this script logging it).
+environment's DB and OpenSearch hosts, using exec_ubuntu
+(bashrc/.functions) - never a bare ssh/nc command. Host is read from
+.state/secrets/novai-<env>/{DB,OPENSEARCH}.secrets at run time. Port: an
+explicit :port in the host value itself if it has one, else OpenSearch
+always falls back to 443 (its real HTTPS endpoint - never that file's
+separate 'port' key, confirmed to be a different value, 9200, that is
+not the endpoint) and DB falls back to its file's 'port' key (confirmed
+correct there - 5432). Host/port aren't printed by this script itself
+(exec_ubuntu's own "Running on ..." line does echo the command it sends,
+which includes the host - that's your own terminal showing your own
+data, not this script logging it).
 
 We only explored the bastion for dev; whether it also reaches test's
 hosts is unconfirmed - that is exactly what --env test checks here.
@@ -62,6 +67,19 @@ ES_HOST="$(normalize_host "$ES_HOST_RAW")"
 [ -n "$DB_HOST" ] || { error "$DB_FILE: 'host' value doesn't look like a plain hostname after stripping scheme/path/port - not running a check against it"; exit 1; }
 [ -n "$ES_HOST" ] || { error "$ES_FILE: 'host' value doesn't look like a plain hostname after stripping scheme/path/port - not running a check against it"; exit 1; }
 
+# Port: prefer an explicit :port in the host value itself (the real endpoint address) over
+# the file's separate 'port' key - confirmed for OpenSearch, whose file's 'port' key is 9200
+# while the managed domain's real HTTPS endpoint is 443, so a check built from the key alone
+# probes the wrong port (HUB-106 real-run report). DB has no such mismatch (its 'port' key -
+# 5432 - matches the real endpoint), so it still falls back to the key; OpenSearch falls back
+# to 443 instead (its only real option over HTTPS).
+DB_PORT="$(url_port "$DB_HOST_RAW")"
+[ -n "$DB_PORT" ] || DB_PORT="$(secrets_kv_get "$DB_FILE" port)"
+ES_PORT="$(url_port "$ES_HOST_RAW")"
+[ -n "$ES_PORT" ] || ES_PORT=443
+[[ "$DB_PORT" =~ ^[0-9]+$ ]] || { error "$DB_FILE: could not resolve a DB port (no :port in 'host', and 'port' key is missing or not a number)"; exit 1; }
+[[ "$ES_PORT" =~ ^[0-9]+$ ]] || { error "internal error: ES_PORT resolved to '$ES_PORT'"; exit 1; }
+
 BASTION_FUNCTIONS="$HOME/dev/scripts/bashrc/.functions"
 [ -f "$BASTION_FUNCTIONS" ] || { error "not found: $BASTION_FUNCTIONS"; exit 1; }
 # shellcheck disable=SC1090
@@ -72,16 +90,16 @@ source "$BASTION_FUNCTIONS" >/dev/null
 # that case without meaningfully slowing down the common fast-fail case. Overridable.
 TIMEOUT_S="${CLOUD_BASTION_CHECK_TIMEOUT_S:-10}"
 
-log "checking '${ENV_NAME}' DB host:5432 from the cat-dev bastion..."
-if exec_ubuntu cat-dev "timeout ${TIMEOUT_S} bash -c '</dev/tcp/${DB_HOST}/5432' && echo __TCP_OPEN__ || echo __TCP_CLOSED__" 2>&1 | tee /dev/stderr | grep -q __TCP_OPEN__; then
-  log "'${ENV_NAME}' DB host:5432 - reachable from the bastion"
+log "checking '${ENV_NAME}' DB host:${DB_PORT} from the cat-dev bastion..."
+if exec_ubuntu cat-dev "timeout ${TIMEOUT_S} bash -c '</dev/tcp/${DB_HOST}/${DB_PORT}' && echo __TCP_OPEN__ || echo __TCP_CLOSED__" 2>&1 | tee /dev/stderr | grep -q __TCP_OPEN__; then
+  log "'${ENV_NAME}' DB host:${DB_PORT} - reachable from the bastion"
 else
-  log "'${ENV_NAME}' DB host:5432 - NOT reachable from the bastion"
+  log "'${ENV_NAME}' DB host:${DB_PORT} - NOT reachable from the bastion"
 fi
 
-log "checking '${ENV_NAME}' OpenSearch host:443 from the cat-dev bastion..."
-if exec_ubuntu cat-dev "timeout ${TIMEOUT_S} bash -c '</dev/tcp/${ES_HOST}/443' && echo __TCP_OPEN__ || echo __TCP_CLOSED__" 2>&1 | tee /dev/stderr | grep -q __TCP_OPEN__; then
-  log "'${ENV_NAME}' OpenSearch host:443 - reachable from the bastion"
+log "checking '${ENV_NAME}' OpenSearch host:${ES_PORT} from the cat-dev bastion..."
+if exec_ubuntu cat-dev "timeout ${TIMEOUT_S} bash -c '</dev/tcp/${ES_HOST}/${ES_PORT}' && echo __TCP_OPEN__ || echo __TCP_CLOSED__" 2>&1 | tee /dev/stderr | grep -q __TCP_OPEN__; then
+  log "'${ENV_NAME}' OpenSearch host:${ES_PORT} - reachable from the bastion"
 else
-  log "'${ENV_NAME}' OpenSearch host:443 - NOT reachable from the bastion"
+  log "'${ENV_NAME}' OpenSearch host:${ES_PORT} - NOT reachable from the bastion"
 fi

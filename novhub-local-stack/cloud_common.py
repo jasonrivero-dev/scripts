@@ -83,6 +83,33 @@ def scrub_arns(text):
     return ARN_RE.sub(lambda m: reduce_arn(m.group(0)) or "arn:***", text)
 
 
+# A signature-mismatch 403 from AWS can echo back the Canonical Request / String to Sign it
+# computed, which embeds the actual request headers it was given - including a REAL,
+# usable session token or access key. Confirmed for real (the owner's dev run echoed
+# x-amz-security-token back in exactly this way). Key name kept, value replaced - never drop
+# the key entirely, since which key was echoed is itself diagnostic.
+SECRET_VALUE_PATTERNS = [
+    re.compile(r'(?i)(x-amz-security-token["\']?\s*[:=]\s*["\']?)([^"\'&,\s]+)'),
+    re.compile(r'(?i)(x-amz-signature["\']?\s*[:=]\s*["\']?)([^"\'&,\s]+)'),
+    re.compile(r'(?i)(awsaccesskeyid["\']?\s*[:=]\s*["\']?)([^"\'&,\s]+)'),
+    re.compile(r'(?i)(authorization["\']?\s*[:=]\s*["\']?)([^"\'\n]+)'),
+]
+
+
+def scrub_secrets(text):
+    for pat in SECRET_VALUE_PATTERNS:
+        text = pat.sub(lambda m: m.group(1) + "<redacted>", text)
+    return text
+
+
+def scrub_sensitive(text):
+    """Everything that must never reach a log, a tee'd file, or this tool's own stdout
+    unscrubbed: full ARNs (session names can carry a username/email) and any of the actual
+    secret VALUES AWS can echo back in a signature-mismatch error body. Call this on every
+    response body before showing or storing it - never show one raw."""
+    return scrub_secrets(scrub_arns(text))
+
+
 def sso_login_hint(exc, profile):
     if type(exc).__name__ in SSO_ERROR_TYPES or "sso" in str(exc).lower():
         return f" - run: aws sso login --profile {profile}"
@@ -108,14 +135,19 @@ def sigv4_sign(method, url, region, profile, headers, data=None):
     return dict(request.headers), None
 
 
-def sigv4_request(method, es_host, es_local_port, path, region, profile, via_hostname=False,
+def sigv4_request(method, es_host, es_loopback, path, region, profile, via_hostname=False,
                     data=None, timeout=15):
-    """One signed request through cloud-tunnel.sh's local forward. Host header is always set
-    to the real ES hostname (needed for the signature to match, independent of via_hostname),
-    the connection target is 127.0.0.1 unless via_hostname says to use the real name (needs
-    the owner's /etc/hosts line - see cloud-hosts.sh). TLS cert verification is off, matching
-    NovApi's own osRepo/queries.js (rejectUnauthorized: false) - not a new weakening."""
-    base = f"https://{es_host}:{es_local_port}" if via_hostname else f"https://127.0.0.1:{es_local_port}"
+    """One signed request through cloud-tunnel.sh's local forward. The URL used for SIGNING
+    (and the Host header actually sent) never carries a port - a tunnel on a high port makes
+    the client sign "host:PORT" while AWS recomputes the signature for "host" alone, so every
+    request gets a 403 "signature we calculated does not match" (the real bug this chases).
+    That's why the OpenSearch forward is pinned to port 443 locally (cloud-tunnel.sh) instead
+    of a configurable high port like the DB one - the connection target here is that per-env
+    loopback address (es_loopback) unless via_hostname says to use the real name directly
+    (needs the owner's /etc/hosts line mapping it to that same loopback - see cloud-hosts.sh).
+    TLS cert verification is off, matching NovApi's own osRepo/queries.js
+    (rejectUnauthorized: false) - not a new weakening."""
+    base = f"https://{es_host}" if via_hostname else f"https://{es_loopback}"
     url = f"https://{es_host}{path}"
     signed, err = sigv4_sign(method, url, region, profile, {"Host": es_host}, data=data)
     if err:

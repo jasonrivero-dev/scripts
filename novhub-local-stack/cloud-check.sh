@@ -31,14 +31,15 @@ account number + role name, no session name) - only pass/fail, counts,
 and a missing key's NAME if one is absent.
 
   --via-hostname   connect using the real OpenSearch hostname instead of
-                   127.0.0.1 (same local port) - needs the owner to have
-                   added a /etc/hosts line for that host -> 127.0.0.1
-                   first (this script does not edit /etc/hosts). Without
-                   this flag, the request already carries the correct
-                   Host header for signing/routing either way - only try
-                   --via-hostname if the default fails in a way that
-                   looks like a TLS/SNI problem, not a signature or
-                   credentials problem.
+                   this env's loopback address directly - needs the
+                   owner to have added the /etc/hosts line first
+                   (cloud-hosts.sh add --env <env>; this script does not
+                   edit /etc/hosts itself). Without this flag, the
+                   request already carries the correct Host header for
+                   signing/routing either way - only try --via-hostname
+                   if the default fails in a way that looks like a
+                   TLS/SNI problem, not a signature or credentials
+                   problem.
 
 Region and credentials for the SigV4 attempt come from cloud-env.env
 (git-ignored, auto-created from the committed cloud-env.env.example) -
@@ -71,19 +72,18 @@ case "$ENV_NAME" in
   *) error "--env dev|test is required"; exit 1 ;;
 esac
 
-TUNNEL_NAME="cloud-tunnel-${ENV_NAME}"
-if ! is_running "$TUNNEL_NAME"; then
-  error "tunnel for '$ENV_NAME' is not open - run: ./cloud-tunnel.sh open --env $ENV_NAME"
+if ! is_running "cloud-tunnel-${ENV_NAME}-db" || ! is_running "cloud-tunnel-${ENV_NAME}-es"; then
+  error "tunnel for '$ENV_NAME' is not fully open - run: ./cloud-tunnel.sh open --env $ENV_NAME"
   exit 1
 fi
 
 ensure_cloud_tunnel_ports
 if [ "$ENV_NAME" = "dev" ]; then
   DB_LOCAL_PORT="$(cloud_tunnel_port_get DEV_DB_LOCAL_PORT)"
-  ES_LOCAL_PORT="$(cloud_tunnel_port_get DEV_OPENSEARCH_LOCAL_PORT)"
+  ES_LOOPBACK="$(cloud_tunnel_port_get DEV_OPENSEARCH_LOOPBACK)"
 else
   DB_LOCAL_PORT="$(cloud_tunnel_port_get TEST_DB_LOCAL_PORT)"
-  ES_LOCAL_PORT="$(cloud_tunnel_port_get TEST_OPENSEARCH_LOCAL_PORT)"
+  ES_LOOPBACK="$(cloud_tunnel_port_get TEST_OPENSEARCH_LOOPBACK)"
 fi
 
 SECRETS_DIR="$NOVHUB_ROOT/.state/secrets/novai-${ENV_NAME}"
@@ -118,7 +118,7 @@ fi
 
 export CLOUD_CHECK_ENV="$ENV_NAME"
 export CLOUD_CHECK_DB_LOCAL_PORT="$DB_LOCAL_PORT"
-export CLOUD_CHECK_ES_LOCAL_PORT="$ES_LOCAL_PORT"
+export CLOUD_CHECK_ES_LOOPBACK="$ES_LOOPBACK"
 export CLOUD_CHECK_SECRETS_DIR="$SECRETS_DIR"
 export CLOUD_CHECK_VIA_HOSTNAME="$VIA_HOSTNAME"
 export CLOUD_CHECK_AWS_REGION="$AWS_REGION_CFG"

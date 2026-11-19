@@ -6,9 +6,11 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
 Usage: cloud-hosts.sh add|remove --env dev|test
 
 HUB-106: adds/removes exactly one /etc/hosts line mapping that
-environment's real OpenSearch hostname to 127.0.0.1, so a request built
-for the real hostname (for SNI + the correct Host header) actually lands
-on cloud-tunnel.sh's local forward. The host comes from
+environment's real OpenSearch hostname to its own loopback address
+(DEV/TEST_OPENSEARCH_LOOPBACK in cloud-tunnel-ports.env - each env gets
+its own so both can have port 443 open at once), so a request built for
+the real hostname (for SNI + the correct Host header) actually lands on
+cloud-tunnel.sh's local forward. The host comes from
 .state/secrets/novai-<env>/OPENSEARCH.secrets at run time, never
 hardcoded, never printed - only the resolved line itself is shown, since
 that's the whole point of this tool (you're about to put it in a system
@@ -57,8 +59,16 @@ ES_HOST_RAW="$(secrets_kv_get "$ES_FILE" host)"
 ES_HOST="$(normalize_host "$ES_HOST_RAW")"
 [ -n "$ES_HOST" ] || { error "$ES_FILE: 'host' value doesn't look like a plain hostname after stripping scheme/path/port"; exit 1; }
 
+ensure_cloud_tunnel_ports
+if [ "$ENV_NAME" = "dev" ]; then
+  ES_LOOPBACK="$(cloud_tunnel_port_get DEV_OPENSEARCH_LOOPBACK)"
+else
+  ES_LOOPBACK="$(cloud_tunnel_port_get TEST_OPENSEARCH_LOOPBACK)"
+fi
+[ -n "$ES_LOOPBACK" ] || { error "no OpenSearch loopback address configured for '$ENV_NAME' in $CLOUD_TUNNEL_PORTS_FILE"; exit 1; }
+
 MARKER="$(cloud_hosts_marker "$ENV_NAME")"
-LINE="127.0.0.1 ${ES_HOST} ${MARKER}"
+LINE="${ES_LOOPBACK} ${ES_HOST} ${MARKER}"
 
 if [ "$ACTION" = "add" ]; then
   if grep -qF "$LINE" /etc/hosts; then
