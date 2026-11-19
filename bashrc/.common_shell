@@ -1,7 +1,7 @@
 # --- PATHS ---
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
 export GOPATH="$HOME/go"
-source .keys
+source $HOME/.keys
 
 # --- SYSTEM SETTINGS ---
 export CLICOLOR_FORCE=1
