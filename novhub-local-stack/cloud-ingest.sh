@@ -77,6 +77,10 @@ itself; the owner decides.
                     + a Postgres DELETE), scoped ONLY to this tool's own
                     synthetic job_id / run_id >= the run-id base - never
                     robot_id alone, since the robot also has real data.
+                    A confirmed removal audits both stores first, attempts
+                    both scoped deletions, and audits again; retries can
+                    finish a partial delete. Exit is successful only when
+                    both stores are verified clear.
                     The OpenSearch delete matches on job_id, not on run_id
                     or document _id, so it covers every synthetic document
                     regardless of how many duplicate invocations wrote

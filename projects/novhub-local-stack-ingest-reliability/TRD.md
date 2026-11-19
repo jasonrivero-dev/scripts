@@ -162,6 +162,7 @@ Run with `novhub-local-stack/.venv/bin/python -m unittest discover -s novhub-loc
 |---|------|----------|--------|--------|------|
 | 1 | Step 1 | Which columns are feedback fields, and how should timestamp behave? | Randomize `autonomy_dist_x_raw`, `autonomy_dist_y_raw`, `camera_temp`, `live_amps`, `live_travel_speed`, `live_trim`, `live_voltage`, `live_weave_amplitude`, `live_weave_frequency`, `live_wfs`, `max_gap_measurement`, and `prescan_gap_measurement`; keep timestamp sequential, not randomized. | user | 2026-11-19 |
 | 2 | Step 1 | How should values be sampled from probable ranges? | Uniformly; integers inclusive, floats continuous; generate 50 rows and ensure at least two distinct values per selected field. | user | 2026-11-19 |
+| 3 | Step 3 | If one store's delete request errors, should removal attempt the other store and post-delete audit? | Attempt both scoped deletions, then audit both stores; report errors and fail unless absence is verified. | user | 2026-11-19 |
 
 ## Traceability Matrix
 

@@ -59,6 +59,8 @@ SCHEMA = {
 
 def empty_audit_state():
     return {
+        "run_id_field": "run_id",
+        "job_id_field": "weld_session.job_id.keyword",
         "opensearch_counts": {},
         "opensearch_unkeyed_docs": 0,
         "postgres_counts": {},
@@ -71,6 +73,8 @@ def complete_audit_state(run_count):
         cloud_ingest.RUN_ID_BASE + run_count + 1,
     )
     return {
+        "run_id_field": "run_id",
+        "job_id_field": "weld_session.job_id.keyword",
         "opensearch_counts": {
             run_id: cloud_ingest.POINTS_PER_RUN + 1 for run_id in run_ids
         },
@@ -96,8 +100,9 @@ class FakeResponse:
 
 
 class FakeCursor:
-    def __init__(self, rows):
+    def __init__(self, rows, rowcount=0):
         self.rows = rows
+        self.rowcount = rowcount
         self.query = None
         self.params = None
 
@@ -116,12 +121,16 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, rows):
-        self.fake_cursor = FakeCursor(rows)
+    def __init__(self, rows, rowcount=0):
+        self.fake_cursor = FakeCursor(rows, rowcount)
         self.closed = False
+        self.committed = False
 
     def cursor(self):
         return self.fake_cursor
+
+    def commit(self):
+        self.committed = True
 
     def close(self):
         self.closed = True
@@ -391,7 +400,9 @@ class CloudIngestAuditTests(unittest.TestCase):
         ):
             state = cloud_ingest.audit_synthetic_state("example", "synthetic-index", {})
 
-        self.assertEqual(state, complete_audit_state(1))
+        expected_state = complete_audit_state(1)
+        expected_state["job_id_field"] = "weld_session.job_id"
+        self.assertEqual(state, expected_state)
         self.assertEqual(request.call_args_list[0].args[0], "GET")
         self.assertEqual(request.call_args_list[0].args[3], "/synthetic-index/_mapping")
         self.assertEqual(request.call_args_list[1].args[3], "/synthetic-index/_search")
@@ -463,6 +474,144 @@ class CloudIngestAuditTests(unittest.TestCase):
             f"OpenSearch run {first_id} has 102 documents",
             "; ".join(cloud_ingest.audit_issues(duplicate_state, {first_id})),
         )
+
+
+class CloudIngestRemovalTests(unittest.TestCase):
+    def run_confirmed_remove(self, pre_state, post_state, es_result, pg_rowcount):
+        connection = FakeConnection([], rowcount=pg_rowcount)
+        with (
+            patch("builtins.input", return_value="1555"),
+            patch.object(cloud_ingest, "audit_synthetic_state",
+                         side_effect=[pre_state, post_state]) as audit,
+            patch.object(cloud_ingest, "sigv4_request",
+                         return_value=(FakeResponse(es_result), None)) as request,
+            patch.object(cloud_ingest, "pg_connect", return_value=connection),
+            patch.object(cloud_ingest, "refresh_index") as refresh,
+        ):
+            cloud_ingest.do_remove(Namespace(confirm_delete=True), "example", "index", {})
+        return connection, request, refresh, audit
+
+    def test_removal_deletes_scoped_records_and_verifies_absence(self):
+        pre_state = complete_audit_state(2)
+        connection, request, refresh, audit = self.run_confirmed_remove(
+            pre_state,
+            empty_audit_state(),
+            {"deleted": 102, "timed_out": False, "failures": []},
+            2,
+        )
+
+        self.assertEqual(audit.call_count, 2)
+        self.assertEqual(request.call_args.args[3], "/index/_delete_by_query")
+        query = json.loads(request.call_args.kwargs["data"])
+        self.assertEqual(
+            query,
+            {"query": {"term": {"weld_session.job_id.keyword": "PERF-ING-JOB-1555"}}},
+        )
+        self.assertEqual(
+            connection.fake_cursor.query,
+            "DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id >= %s",
+        )
+        self.assertEqual(connection.fake_cursor.params, (1555, cloud_ingest.RUN_ID_BASE))
+        self.assertTrue(connection.committed)
+        self.assertTrue(connection.closed)
+        refresh.assert_called_once_with("example", "index")
+
+    def test_repeated_removal_of_empty_stores_is_verified_noop(self):
+        connection, request, _, _ = self.run_confirmed_remove(
+            empty_audit_state(),
+            empty_audit_state(),
+            {"deleted": 0, "timed_out": False, "failures": []},
+            0,
+        )
+        self.assertTrue(request.called)
+        self.assertTrue(connection.committed)
+        self.assertEqual(connection.fake_cursor.params, (1555, cloud_ingest.RUN_ID_BASE))
+
+    def test_removal_continues_when_either_store_is_already_empty(self):
+        run_id = cloud_ingest.RUN_ID_BASE + 1
+        states = [
+            {
+                **empty_audit_state(),
+                "opensearch_counts": {run_id: 51},
+            },
+            {
+                **empty_audit_state(),
+                "postgres_counts": {run_id: 1},
+            },
+        ]
+        for state in states:
+            with self.subTest(opensearch=bool(state["opensearch_counts"])):
+                connection, request, _, _ = self.run_confirmed_remove(
+                    state,
+                    empty_audit_state(),
+                    {"deleted": sum(state["opensearch_counts"].values()),
+                     "timed_out": False, "failures": []},
+                    sum(state["postgres_counts"].values()),
+                )
+                self.assertTrue(request.called)
+                self.assertTrue(connection.committed)
+
+    def test_store_delete_error_still_attempts_other_store_and_fails_if_data_remains(self):
+        pre_state = complete_audit_state(1)
+        residual_state = {
+            **pre_state,
+            "postgres_counts": {},
+        }
+        connection = FakeConnection([], rowcount=1)
+        with (
+            patch("builtins.input", return_value="1555"),
+            patch.object(cloud_ingest, "audit_synthetic_state",
+                         side_effect=[pre_state, residual_state]) as audit,
+            patch.object(cloud_ingest, "sigv4_request",
+                         return_value=(None, "temporary OpenSearch failure")),
+            patch.object(cloud_ingest, "pg_connect", return_value=connection),
+            patch.object(cloud_ingest, "refresh_index") as refresh,
+        ):
+            with self.assertRaisesRegex(SystemExit, "Removal failed"):
+                cloud_ingest.do_remove(Namespace(confirm_delete=True), "example", "index", {})
+
+        self.assertEqual(audit.call_count, 2)
+        self.assertTrue(connection.committed)
+        refresh.assert_called_once()
+
+    def test_postgres_delete_error_is_reported_after_opensearch_cleanup(self):
+        pre_state = complete_audit_state(1)
+        residual_state = {
+            **pre_state,
+            "opensearch_counts": {},
+        }
+        with (
+            patch("builtins.input", return_value="1555"),
+            patch.object(cloud_ingest, "audit_synthetic_state",
+                         side_effect=[pre_state, residual_state]) as audit,
+            patch.object(cloud_ingest, "sigv4_request",
+                         return_value=(FakeResponse({
+                             "deleted": 51, "timed_out": False, "failures": [],
+                         }), None)) as request,
+            patch.object(
+                cloud_ingest,
+                "pg_connect",
+                side_effect=psycopg2.OperationalError("temporary Postgres failure"),
+            ),
+            patch.object(cloud_ingest, "refresh_index") as refresh,
+        ):
+            with self.assertRaisesRegex(SystemExit, "Removal failed"):
+                cloud_ingest.do_remove(Namespace(confirm_delete=True), "example", "index", {})
+
+        self.assertEqual(audit.call_count, 2)
+        request.assert_called_once()
+        refresh.assert_called_once()
+
+    def test_remove_dry_run_does_not_audit_or_delete(self):
+        with (
+            patch.object(cloud_ingest, "audit_synthetic_state") as audit,
+            patch.object(cloud_ingest, "sigv4_request") as request,
+            patch.object(cloud_ingest, "pg_connect") as pg_connect,
+        ):
+            cloud_ingest.do_remove(Namespace(confirm_delete=False), "example", "index", {})
+        audit.assert_not_called()
+        request.assert_not_called()
+        pg_connect.assert_not_called()
 
 
 if __name__ == "__main__":

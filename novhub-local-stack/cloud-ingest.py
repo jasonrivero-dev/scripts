@@ -315,6 +315,8 @@ def audit_synthetic_state(es_host, index, db_kv):
         es_host, index, run_id_field, job_id_field
     )
     return {
+        "run_id_field": run_id_field,
+        "job_id_field": job_id_field,
         "opensearch_counts": os_counts,
         "opensearch_unkeyed_docs": unkeyed_docs,
         "postgres_counts": postgres_run_counts(db_kv),
@@ -334,7 +336,19 @@ def format_run_ids(run_ids):
     preview = ", ".join(str(value) for value in values[:5])
     if len(values) > 5:
         preview += f", ... (+{len(values) - 5})"
-    return preview
+    return preview or "none"
+
+
+def print_audit_snapshot(label, state):
+    os_counts = state["opensearch_counts"]
+    pg_counts = state["postgres_counts"]
+    print(
+        f"{label} audit: OpenSearch {sum(os_counts.values())} document(s) across "
+        f"{len(os_counts)} run ID(s) [{format_run_ids(os_counts)}], "
+        f"{state['opensearch_unkeyed_docs']} without run_id; Postgres "
+        f"{sum(pg_counts.values())} association row(s) across {len(pg_counts)} "
+        f"run ID(s) [{format_run_ids(pg_counts)}]."
+    )
 
 
 def audit_issues(state, expected_run_ids=None):
@@ -663,14 +677,66 @@ def build_child_env(es_host, index, db_kv):
     }
 
 
+def delete_opensearch_synthetic_docs(es_host, index, job_id_field, job_id):
+    query = {"query": {"term": {job_id_field: job_id}}}
+    resp, err = sigv4_request(
+        "POST",
+        es_host,
+        ES_LOOPBACK,
+        f"/{index}/_delete_by_query",
+        AWS_REGION,
+        AWS_PROFILE,
+        data=json.dumps(query).encode(),
+    )
+    if err:
+        raise ValueError(f"OpenSearch delete failed: {scrub_sensitive(err)}")
+    if resp is None or not resp.ok:
+        status = resp.status_code if resp is not None else "no response"
+        detail = scrub_sensitive(resp.text[:300]) if resp is not None else ""
+        raise ValueError(f"OpenSearch delete failed: {status} {detail}".strip())
+    try:
+        result = resp.json()
+    except ValueError as e:
+        raise ValueError("OpenSearch delete response was not valid JSON") from e
+    if not isinstance(result, dict):
+        raise ValueError("OpenSearch delete response was not a JSON object")
+    failures = result.get("failures")
+    if result.get("timed_out") is not False or not isinstance(failures, list) or failures:
+        raise ValueError("OpenSearch delete reported a timeout or shard failure")
+    deleted = result.get("deleted")
+    if type(deleted) is not int or deleted < 0:
+        raise ValueError("OpenSearch delete response did not contain a valid deleted count")
+    return deleted
+
+
+def delete_postgres_synthetic_associations(db_kv):
+    conn = None
+    try:
+        conn = pg_connect(db_kv)
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id >= %s",
+                (ROBOT_ID, RUN_ID_BASE),
+            )
+            deleted = cur.rowcount
+        conn.commit()
+    except psycopg2.Error as e:
+        raise ValueError(f"Postgres delete failed: {scrub_sensitive(str(e))}") from e
+    finally:
+        if conn is not None:
+            conn.close()
+    if type(deleted) is not int or deleted < 0:
+        raise ValueError("Postgres delete returned an invalid row count")
+    return deleted
+
+
 def do_remove(args, es_host, index, db_kv):
     job_id = SYNTHETIC_JOB_ID_FMT.format(robot_id=ROBOT_ID)
-    es_query = {"query": {"term": {"weld_session.job_id.keyword": job_id}}}
     pg_statement = f"DELETE FROM weld_presets_associations WHERE robot_id = {ROBOT_ID} AND run_id >= {RUN_ID_BASE};"
     print(f"Would delete, scoped to job_id \"{job_id}\" / run_id >= {RUN_ID_BASE} only (never "
           f"touching robot {ROBOT_ID}'s real, non-synthetic data - this also covers any probe "
           f"run, since probes use this same job_id/run_id scheme):\n"
-          f"  OpenSearch: POST /{index}/_delete_by_query  {json.dumps(es_query)}\n"
+          f"  OpenSearch: POST /{index}/_delete_by_query (term on the mapped job_id field)\n"
           f"  Postgres:   {pg_statement}\n")
     if not args.confirm_delete:
         print("(dry run by default - pass --confirm-delete to actually delete)")
@@ -680,26 +746,50 @@ def do_remove(args, es_host, index, db_kv):
     if answer.strip() != str(ROBOT_ID):
         sys.exit("confirmation did not match - aborting, nothing deleted")
 
-    body = json.dumps(es_query).encode()
-    resp, err = sigv4_request("POST", es_host, ES_LOOPBACK, f"/{index}/_delete_by_query",
-                                AWS_REGION, AWS_PROFILE, data=body)
-    if err:
-        sys.exit(f"OpenSearch delete failed: {err}")
-    if not resp.ok:
-        sys.exit(f"OpenSearch delete failed: {resp.status_code} {scrub_sensitive(resp.text[:300])}")
-    es_deleted = resp.json().get("deleted", "?")
-    print(f"[INFO] OpenSearch: deleted {es_deleted} document(s)")
-
-    conn = pg_connect(db_kv)
     try:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id >= %s",
-                        (ROBOT_ID, RUN_ID_BASE))
-            pg_deleted = cur.rowcount
-        conn.commit()
-    finally:
-        conn.close()
-    print(f"[INFO] Postgres: deleted {pg_deleted} row(s)")
+        pre_state = audit_synthetic_state(es_host, index, db_kv)
+    except ValueError as e:
+        sys.exit(f"pre-delete audit failed: {scrub_sensitive(str(e))}")
+    print_audit_snapshot("Pre-delete", pre_state)
+    pre_issues = audit_issues(pre_state)
+    if pre_issues:
+        print("[WARN] Pre-delete stores are incomplete or inconsistent; continuing with "
+              "scoped cleanup so a retry can finish it: " + "; ".join(pre_issues))
+
+    delete_errors = []
+    try:
+        es_deleted = delete_opensearch_synthetic_docs(
+            es_host, index, pre_state["job_id_field"], job_id
+        )
+        print(f"[INFO] OpenSearch: deleted {es_deleted} document(s)")
+    except ValueError as e:
+        delete_errors.append(scrub_sensitive(str(e)))
+        print(f"[WARN] {delete_errors[-1]}", file=sys.stderr)
+
+    try:
+        pg_deleted = delete_postgres_synthetic_associations(db_kv)
+        print(f"[INFO] Postgres: deleted {pg_deleted} row(s)")
+    except ValueError as e:
+        delete_errors.append(scrub_sensitive(str(e)))
+        print(f"[WARN] {delete_errors[-1]}", file=sys.stderr)
+
+    refresh_index(es_host, index)
+    try:
+        post_state = audit_synthetic_state(es_host, index, db_kv)
+    except ValueError as e:
+        details = f"; delete request errors: {'; '.join(delete_errors)}" if delete_errors else ""
+        sys.exit(f"post-delete audit failed: {scrub_sensitive(str(e))}{details}")
+    print_audit_snapshot("Post-delete", post_state)
+
+    residual_issues = audit_issues(post_state, set())
+    if not audit_is_empty(post_state):
+        details = residual_issues + delete_errors
+        sys.exit("[RESULT] Removal failed; synthetic data remains or could not be verified: "
+                 + "; ".join(details))
+    if delete_errors:
+        print("[WARN] A delete request reported an error, but post-delete audit verified "
+              "absence from both stores: " + "; ".join(delete_errors))
+    print("[RESULT] Removal verified: no synthetic data remains in OpenSearch or Postgres.")
 
 
 def do_ingest(args, es_host, index, db_kv):
