@@ -48,7 +48,7 @@ The supplied Hermit V2 template has 114 typed fields and two `values` rows. Only
 | Ingestion integration | Keep `cloud-ingest.sh` and `cloud-ingest.py` as the only code changed for the ingest path; invoke the existing `perfload` command with a temporary transformed template | Meets the scripts-repository constraint without modifying the external ingester |
 | Template transformation | Use Python standard-library JSON and temporary-file handling; preserve the original template | Avoids new runtime dependencies and mutation of the user-provided sample |
 | Range source | Keep the supplied range map at `novhub-local-stack/schema_mapping.json` and match entries by column name | Removes runtime dependence on a Downloads path |
-| Sensor generation | Use mapped probable ranges for non-static feedback/measurement fields; preserve IDs, metadata, command/setpoint values, and time-sequencing fields | Varies sensor values without corrupting identity or run structure |
+| Sensor generation | Use the 12 feedback fields listed in Clarifications #1 and uniform sampling from Clarifications #2; preserve IDs, metadata, command/setpoint values, and time-sequencing fields | Varies sensor values without corrupting identity or run structure |
 | Batch identity | Reuse the configured robot, synthetic job marker, and run-ID range as the scoped identity; compare run-ID sets across stores | Keeps repeat detection and deletion bounded to this tool’s synthetic records |
 | Idempotent add | If the requested batch is already complete, return a verified no-op; if absent, ingest it; if partial or mismatched, fail before invoking `perfload` and direct the operator to audit/cleanup | Prevents overlapping run IDs from creating duplicate OpenSearch documents |
 | Idempotent delete | Delete only records associated with the synthetic identity from each store, then audit both stores; a repeated delete of an empty batch is a verified no-op | Supports safe retries without touching real robot data |
@@ -95,9 +95,9 @@ There is no standalone audit flag. The OpenSearch index mapping is fetched read-
 
 ### Step 1: Generate ranged template rows in the scripts repo
 
-- **Files:** `novhub-local-stack/schema_mapping.json`, `novhub-local-stack/cloud-ingest.py`, `novhub-local-stack/cloud-ingest.sh`, `novhub-local-stack/tests/test_cloud_ingest.py`
-- **What:** Add the supplied mapping as repo-local configuration. Transform the template using its probable ranges for non-static feedback/measurement fields; preserve IDs, metadata, command/setpoint values, time sequencing, schema, and types. Write a private temporary JSON template for the unchanged ingester. Check state before generation so a complete operation is a no-op.
-- **Verify:** Fixture tests assert the original template is unchanged, selected feedback/measurement fields vary within mapped ranges, excluded fields remain unchanged except existing run/time substitutions, schema/types are preserved, and a completed batch does not invoke template generation or the ingester.
+- **Files:** `novhub-local-stack/schema_mapping.json`, `novhub-local-stack/cloud-ingest.py`, `novhub-local-stack/tests/test_cloud_ingest.py`
+- **What:** Add the supplied mapping as repo-local configuration. Generate `POINTS_PER_RUN` rows, sampling the confirmed feedback fields uniformly within their mapped ranges. Preserve other fields, schema, and types; advance `arc_time` and `plc_time` by the mapped increment and keep `timestamp` sequential (the unchanged ingester overwrites it with sequential timestamps). Pass a private temporary JSON template to the unchanged ingester. Check state and honor dry-run before generating it.
+- **Verify:** Fixture tests assert the original file is unchanged, all 12 feedback fields vary within mapped ranges, excluded fields remain unchanged, time fields are sequential, schema/types are preserved, the temporary file is private and cleaned up, and no-op/dry-run paths do not generate it.
 
 ### Step 2: Add automatic cross-store audit and idempotent add behavior
 
@@ -131,7 +131,7 @@ There is no standalone audit flag. The OpenSearch index mapping is fetched read-
 | Delete retry is a no-op after successful cleanup and never targets unrelated IDs | `novhub-local-stack/tests/test_cloud_ingest.py` | Idempotent deletion |
 | Store errors and count mismatches produce non-zero failures | `novhub-local-stack/tests/test_cloud_ingest.py` | Failure reporting |
 
-Run with `python3 -m unittest discover -s novhub-local-stack/tests`.
+Run with `novhub-local-stack/.venv/bin/python -m unittest discover -s novhub-local-stack/tests`; the script imports the project's installed `psycopg2` dependency.
 
 ### Integration Tests
 
@@ -160,6 +160,8 @@ Run with `python3 -m unittest discover -s novhub-local-stack/tests`.
 
 | # | Step | Question | Answer | Source | Date |
 |---|------|----------|--------|--------|------|
+| 1 | Step 1 | Which columns are feedback fields, and how should timestamp behave? | Randomize `autonomy_dist_x_raw`, `autonomy_dist_y_raw`, `camera_temp`, `live_amps`, `live_travel_speed`, `live_trim`, `live_voltage`, `live_weave_amplitude`, `live_weave_frequency`, `live_wfs`, `max_gap_measurement`, and `prescan_gap_measurement`; keep timestamp sequential, not randomized. | user | 2026-11-19 |
+| 2 | Step 1 | How should values be sampled from probable ranges? | Uniformly; integers inclusive, floats continuous; generate 50 rows and ensure at least two distinct values per selected field. | user | 2026-11-19 |
 
 ## Traceability Matrix
 
