@@ -45,20 +45,15 @@ RUN_ID_BASE = 90000000       # far above any real run_id - also the --remove flo
                               # + run_index, run_index 1-based (cmd/perfload/main.go's main loop) -
                               # with --robot-count always 1 here, every invocation's run_ids are
                               # this base + 1 .. + N, UNCONDITIONALLY starting back at +1 each time.
-                              # CONFIRMED ON A REAL RUN this is NOT idempotent: Postgres upserts on
-                              # run_id (ON CONFLICT DO UPDATE, so it stayed put), but OpenSearch's
-                              # per-document _id is SHA256(wsid|timestamp|suffix) - wsid is a pure
-                              # function of robot_id/run_id, but timestamp is seeded from
-                              # time.Now() at the moment perfload builds the payload (main.go's
-                              # buildPayload), so the SAME run_id gets a DIFFERENT _id every
-                              # invocation, "create" never 409s against it, and OpenSearch ends up
-                              # with duplicate documents instead of an overwrite (internal/parser/
-                              # hermit.go, internal/utils/hash.go, internal/opensearch/bulk.go).
-                              # A later invocation can never safely "continue" where an earlier one
-                              # left off - see do_ingest's already-ingested refusal.
+                              # Re-ingesting the same run IDs would create duplicate OpenSearch
+                              # documents because each invocation uses new timestamps and document
+                              # IDs. The pre-ingest audit therefore permits only a complete no-op
+                              # or an empty state; it rejects partial/conflicting batches.
 RUN_SPACING_S = POINTS_PER_RUN + 300   # perfload's own formula (cmd/perfload/main.go buildPayload)
 SYNTHETIC_JOB_ID_FMT = "PERF-ING-JOB-{robot_id}"   # perfload's own naming (cmd/perfload/main.go)
 RANGE_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema_mapping.json")
+RUN_ID_AGGREGATION_SIZE = TARGET_TOTAL + 1
+RUN_ID_MAPPING_TYPES = {"byte", "short", "integer", "long", "unsigned_long", "keyword"}
 FEEDBACK_FIELDS = (
     "autonomy_dist_x_raw",
     "autonomy_dist_y_raw",
@@ -155,14 +150,255 @@ def os_count(es_host, index, query):
     return resp.json().get("count", 0)
 
 
-def synthetic_count(es_host, index):
-    """Count of THIS TOOL's own synthetic documents (weld_session.job_id, a string field -
-    confirmed from cmd/perfload/main.go's own buildPayload), not a run_id range: OpenSearch's
-    dynamic mapping could store run_id as a keyword OR a number depending on the first
-    document it ever saw, so a numeric range query on it isn't safe to assume blind. job_id is
-    unambiguous - it's always this exact string, never anything real."""
+def resolve_mapped_field(properties, field_path, allowed_types):
+    parts = field_path.split(".")
+    current = properties
+    for part in parts[:-1]:
+        parent = current.get(part)
+        if not isinstance(parent, dict) or parent.get("type") == "nested":
+            raise ValueError(f"OpenSearch mapping is missing object field {field_path}")
+        current = parent.get("properties")
+        if not isinstance(current, dict):
+            raise ValueError(f"OpenSearch mapping is missing object field {field_path}")
+
+    field = current.get(parts[-1])
+    if not isinstance(field, dict):
+        raise ValueError(f"OpenSearch mapping is missing field {field_path}")
+    field_type = field.get("type")
+    if field_type == "text":
+        subfields = field.get("fields")
+        keyword = subfields.get("keyword") if isinstance(subfields, dict) else None
+        if isinstance(keyword, dict) and keyword.get("type") == "keyword":
+            return f"{field_path}.keyword", "keyword"
+    elif field_type in allowed_types:
+        return field_path, field_type
+    raise ValueError(f"OpenSearch mapping has unsupported type for field {field_path}")
+
+
+def resolve_audit_fields(mapping_response):
+    if not isinstance(mapping_response, dict) or not mapping_response:
+        raise ValueError("OpenSearch mapping response did not contain any index mappings")
+
+    resolved = None
+    for index_name, index_mapping in mapping_response.items():
+        mappings = index_mapping.get("mappings") if isinstance(index_mapping, dict) else None
+        properties = mappings.get("properties") if isinstance(mappings, dict) else None
+        if not isinstance(properties, dict):
+            raise ValueError(f"OpenSearch mapping for {index_name} has no properties")
+        current = (
+            resolve_mapped_field(properties, "run_id", RUN_ID_MAPPING_TYPES),
+            resolve_mapped_field(properties, "weld_session.job_id", {"keyword"}),
+        )
+        if resolved is not None and current != resolved:
+            raise ValueError("OpenSearch index mappings disagree on audit field types")
+        resolved = current
+    return resolved[0][0], resolved[1][0]
+
+
+def signed_opensearch_json(method, es_host, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    resp, err = sigv4_request(
+        method, es_host, ES_LOOPBACK, path, AWS_REGION, AWS_PROFILE, data=data, timeout=15
+    )
+    if err:
+        raise ValueError(f"OpenSearch {path} request failed: {scrub_sensitive(err)}")
+    if resp is None or not resp.ok:
+        status = resp.status_code if resp is not None else "no response"
+        detail = scrub_sensitive(resp.text[:300]) if resp is not None else ""
+        raise ValueError(f"OpenSearch {path} request failed: {status} {detail}".strip())
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        raise ValueError(f"OpenSearch {path} response was not valid JSON") from e
+    if not isinstance(payload, dict):
+        raise ValueError(f"OpenSearch {path} response was not a JSON object")
+    return payload
+
+
+def parse_run_id(value):
+    if isinstance(value, bool):
+        raise ValueError("OpenSearch returned a non-integer synthetic run_id")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"\d+", value):
+        return int(value)
+    raise ValueError("OpenSearch returned a non-integer synthetic run_id")
+
+
+def opensearch_run_counts(es_host, index, run_id_field, job_id_field):
     job_id = SYNTHETIC_JOB_ID_FMT.format(robot_id=ROBOT_ID)
-    return os_count(es_host, index, {"term": {"weld_session.job_id.keyword": job_id}})
+    response = signed_opensearch_json(
+        "POST",
+        es_host,
+        f"/{index}/_search",
+        {
+            "size": 0,
+            "query": {"term": {job_id_field: job_id}},
+            "aggs": {
+                "runs": {
+                    "terms": {
+                        "field": run_id_field,
+                        "size": RUN_ID_AGGREGATION_SIZE,
+                        "order": {"_key": "asc"},
+                    }
+                },
+                "missing_run_id": {"missing": {"field": run_id_field}},
+            },
+        },
+    )
+    if response.get("timed_out") is not False:
+        raise ValueError("OpenSearch synthetic-run audit timed out")
+    if response.get("terminated_early") is True:
+        raise ValueError("OpenSearch synthetic-run audit terminated early")
+    shards = response.get("_shards")
+    failed_shards = shards.get("failed") if isinstance(shards, dict) else None
+    if type(failed_shards) is not int or failed_shards != 0:
+        raise ValueError("OpenSearch synthetic-run audit had failed shards")
+    aggregations = response.get("aggregations")
+    runs = aggregations.get("runs") if isinstance(aggregations, dict) else None
+    missing = aggregations.get("missing_run_id") if isinstance(aggregations, dict) else None
+    if not isinstance(runs, dict) or not isinstance(missing, dict):
+        raise ValueError("OpenSearch synthetic-run audit response is missing aggregations")
+    other_doc_count = runs.get("sum_other_doc_count")
+    if type(other_doc_count) is not int or other_doc_count != 0:
+        raise ValueError("OpenSearch synthetic-run audit truncated the run_id buckets")
+    buckets = runs.get("buckets")
+    missing_count = missing.get("doc_count")
+    if not isinstance(buckets, list) or type(missing_count) is not int or missing_count < 0:
+        raise ValueError("OpenSearch synthetic-run audit returned invalid aggregation data")
+
+    run_counts = {}
+    for bucket in buckets:
+        if (
+            not isinstance(bucket, dict)
+            or type(bucket.get("doc_count")) is not int
+            or bucket["doc_count"] < 1
+        ):
+            raise ValueError("OpenSearch synthetic-run audit returned an invalid run bucket")
+        run_id = parse_run_id(bucket.get("key"))
+        if run_id in run_counts:
+            raise ValueError(f"OpenSearch synthetic-run audit duplicated bucket {run_id}")
+        run_counts[run_id] = bucket["doc_count"]
+    return run_counts, missing_count
+
+
+def postgres_run_counts(db_kv):
+    conn = None
+    try:
+        conn = pg_connect(db_kv)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT run_id, COUNT(*) FROM weld_presets_associations "
+                "WHERE robot_id = %s AND run_id >= %s GROUP BY run_id",
+                (ROBOT_ID, RUN_ID_BASE),
+            )
+            rows = cur.fetchall()
+    except psycopg2.Error as e:
+        raise ValueError(f"Postgres synthetic-run audit failed: {scrub_sensitive(str(e))}") from e
+    finally:
+        if conn is not None:
+            conn.close()
+
+    run_counts = {}
+    for run_id, count in rows:
+        normalized_id = parse_run_id(run_id)
+        if type(count) is not int or count < 1:
+            raise ValueError(f"Postgres returned an invalid association count for run {normalized_id}")
+        run_counts[normalized_id] = count
+    return run_counts
+
+
+def audit_synthetic_state(es_host, index, db_kv):
+    mapping = signed_opensearch_json("GET", es_host, f"/{index}/_mapping")
+    run_id_field, job_id_field = resolve_audit_fields(mapping)
+    os_counts, unkeyed_docs = opensearch_run_counts(
+        es_host, index, run_id_field, job_id_field
+    )
+    return {
+        "run_id_field": run_id_field,
+        "job_id_field": job_id_field,
+        "opensearch_counts": os_counts,
+        "opensearch_unkeyed_docs": unkeyed_docs,
+        "postgres_counts": postgres_run_counts(db_kv),
+    }
+
+
+def audit_is_empty(state):
+    return (
+        not state["opensearch_counts"]
+        and state["opensearch_unkeyed_docs"] == 0
+        and not state["postgres_counts"]
+    )
+
+
+def format_run_ids(run_ids):
+    values = sorted(run_ids)
+    preview = ", ".join(str(value) for value in values[:5])
+    if len(values) > 5:
+        preview += f", ... (+{len(values) - 5})"
+    return preview or "none"
+
+
+def print_audit_snapshot(label, state):
+    os_counts = state["opensearch_counts"]
+    pg_counts = state["postgres_counts"]
+    print(
+        f"{label} audit: OpenSearch {sum(os_counts.values())} document(s) across "
+        f"{len(os_counts)} run ID(s) [{format_run_ids(os_counts)}], "
+        f"{state['opensearch_unkeyed_docs']} without run_id; Postgres "
+        f"{sum(pg_counts.values())} association row(s) across {len(pg_counts)} "
+        f"run ID(s) [{format_run_ids(pg_counts)}]."
+    )
+
+
+def audit_issues(state, expected_run_ids=None):
+    os_counts = state["opensearch_counts"]
+    pg_counts = state["postgres_counts"]
+    os_ids = set(os_counts)
+    pg_ids = set(pg_counts)
+    issues = []
+
+    if state["opensearch_unkeyed_docs"]:
+        issues.append(
+            f"OpenSearch has {state['opensearch_unkeyed_docs']} synthetic document(s) without run_id"
+        )
+    if expected_run_ids is None:
+        missing_os = pg_ids - os_ids
+        missing_pg = os_ids - pg_ids
+        if missing_os:
+            issues.append(f"OpenSearch is missing run IDs: {format_run_ids(missing_os)}")
+        if missing_pg:
+            issues.append(f"Postgres is missing run IDs: {format_run_ids(missing_pg)}")
+        if os_ids and (
+            min(os_ids) != RUN_ID_BASE + 1
+            or max(os_ids) > RUN_ID_BASE + TARGET_TOTAL
+            or len(os_ids) != max(os_ids) - RUN_ID_BASE
+        ):
+            issues.append("synthetic run IDs are not a contiguous range from the configured base")
+    else:
+        missing_os = expected_run_ids - os_ids
+        extra_os = os_ids - expected_run_ids
+        missing_pg = expected_run_ids - pg_ids
+        extra_pg = pg_ids - expected_run_ids
+        if missing_os:
+            issues.append(f"OpenSearch is missing run IDs: {format_run_ids(missing_os)}")
+        if extra_os:
+            issues.append(f"OpenSearch has unexpected run IDs: {format_run_ids(extra_os)}")
+        if missing_pg:
+            issues.append(f"Postgres is missing run IDs: {format_run_ids(missing_pg)}")
+        if extra_pg:
+            issues.append(f"Postgres has unexpected run IDs: {format_run_ids(extra_pg)}")
+
+    expected_docs = POINTS_PER_RUN + 1
+    for run_id, count in os_counts.items():
+        if count != expected_docs:
+            issues.append(
+                f"OpenSearch run {run_id} has {count} documents; expected {expected_docs}"
+            )
+    for run_id, count in pg_counts.items():
+        if count != 1:
+            issues.append(f"Postgres run {run_id} has {count} association rows; expected 1")
+    return issues
 
 
 def raw_robot_doc_count(es_host, index):
@@ -203,19 +439,6 @@ def wait_for_expected_doc_count(es_host, index, raw_before, expected_delta, time
         time.sleep(1)
 
 
-def pg_association_count(db_kv):
-    """Postgres weld_presets_associations rows for this robot's synthetic run_id range only -
-    the same scoping --remove uses, so this number is exactly what --remove would clear."""
-    conn = pg_connect(db_kv)
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM weld_presets_associations WHERE robot_id = %s AND run_id >= %s",
-                        (ROBOT_ID, RUN_ID_BASE))
-            return cur.fetchone()[0]
-    finally:
-        conn.close()
-
-
 def print_plan(n_runs, total_now, label="Runs to add"):
     oldest_offset_s = n_runs * RUN_SPACING_S
     oldest_days = oldest_offset_s / 86400
@@ -226,9 +449,8 @@ Target total:         ~{TARGET_TOTAL}
 {label}:        {n_runs}
 Points per run:       {POINTS_PER_RUN}
 Run-id base:          {RUN_ID_BASE} (fixed - also the removal boundary; every run of this
-                      tool restarts at base+1 - running again while prior synthetic data
-                      exists DUPLICATES OpenSearch documents, confirmed on a real run - see
-                      the already-ingested check below)
+                      tool restarts at base+1 - exact completed batches are a no-op;
+                      partial/conflicting batches fail the automatic audit before writing)
 Spacing between runs: {RUN_SPACING_S}s (perfload's own formula: points_per_run + 300)
 Oldest run in this batch: ~{oldest_days:.1f} days before whenever this actually runs
   (the capture pins its own date range separately, so this window is informational, not
@@ -455,14 +677,66 @@ def build_child_env(es_host, index, db_kv):
     }
 
 
+def delete_opensearch_synthetic_docs(es_host, index, job_id_field, job_id):
+    query = {"query": {"term": {job_id_field: job_id}}}
+    resp, err = sigv4_request(
+        "POST",
+        es_host,
+        ES_LOOPBACK,
+        f"/{index}/_delete_by_query",
+        AWS_REGION,
+        AWS_PROFILE,
+        data=json.dumps(query).encode(),
+    )
+    if err:
+        raise ValueError(f"OpenSearch delete failed: {scrub_sensitive(err)}")
+    if resp is None or not resp.ok:
+        status = resp.status_code if resp is not None else "no response"
+        detail = scrub_sensitive(resp.text[:300]) if resp is not None else ""
+        raise ValueError(f"OpenSearch delete failed: {status} {detail}".strip())
+    try:
+        result = resp.json()
+    except ValueError as e:
+        raise ValueError("OpenSearch delete response was not valid JSON") from e
+    if not isinstance(result, dict):
+        raise ValueError("OpenSearch delete response was not a JSON object")
+    failures = result.get("failures")
+    if result.get("timed_out") is not False or not isinstance(failures, list) or failures:
+        raise ValueError("OpenSearch delete reported a timeout or shard failure")
+    deleted = result.get("deleted")
+    if type(deleted) is not int or deleted < 0:
+        raise ValueError("OpenSearch delete response did not contain a valid deleted count")
+    return deleted
+
+
+def delete_postgres_synthetic_associations(db_kv):
+    conn = None
+    try:
+        conn = pg_connect(db_kv)
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id >= %s",
+                (ROBOT_ID, RUN_ID_BASE),
+            )
+            deleted = cur.rowcount
+        conn.commit()
+    except psycopg2.Error as e:
+        raise ValueError(f"Postgres delete failed: {scrub_sensitive(str(e))}") from e
+    finally:
+        if conn is not None:
+            conn.close()
+    if type(deleted) is not int or deleted < 0:
+        raise ValueError("Postgres delete returned an invalid row count")
+    return deleted
+
+
 def do_remove(args, es_host, index, db_kv):
     job_id = SYNTHETIC_JOB_ID_FMT.format(robot_id=ROBOT_ID)
-    es_query = {"query": {"term": {"weld_session.job_id.keyword": job_id}}}
     pg_statement = f"DELETE FROM weld_presets_associations WHERE robot_id = {ROBOT_ID} AND run_id >= {RUN_ID_BASE};"
     print(f"Would delete, scoped to job_id \"{job_id}\" / run_id >= {RUN_ID_BASE} only (never "
           f"touching robot {ROBOT_ID}'s real, non-synthetic data - this also covers any probe "
           f"run, since probes use this same job_id/run_id scheme):\n"
-          f"  OpenSearch: POST /{index}/_delete_by_query  {json.dumps(es_query)}\n"
+          f"  OpenSearch: POST /{index}/_delete_by_query (term on the mapped job_id field)\n"
           f"  Postgres:   {pg_statement}\n")
     if not args.confirm_delete:
         print("(dry run by default - pass --confirm-delete to actually delete)")
@@ -472,34 +746,65 @@ def do_remove(args, es_host, index, db_kv):
     if answer.strip() != str(ROBOT_ID):
         sys.exit("confirmation did not match - aborting, nothing deleted")
 
-    body = json.dumps(es_query).encode()
-    resp, err = sigv4_request("POST", es_host, ES_LOOPBACK, f"/{index}/_delete_by_query",
-                                AWS_REGION, AWS_PROFILE, data=body)
-    if err:
-        sys.exit(f"OpenSearch delete failed: {err}")
-    if not resp.ok:
-        sys.exit(f"OpenSearch delete failed: {resp.status_code} {scrub_sensitive(resp.text[:300])}")
-    es_deleted = resp.json().get("deleted", "?")
-    print(f"[INFO] OpenSearch: deleted {es_deleted} document(s)")
-
-    conn = pg_connect(db_kv)
     try:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id >= %s",
-                        (ROBOT_ID, RUN_ID_BASE))
-            pg_deleted = cur.rowcount
-        conn.commit()
-    finally:
-        conn.close()
-    print(f"[INFO] Postgres: deleted {pg_deleted} row(s)")
+        pre_state = audit_synthetic_state(es_host, index, db_kv)
+    except ValueError as e:
+        sys.exit(f"pre-delete audit failed: {scrub_sensitive(str(e))}")
+    print_audit_snapshot("Pre-delete", pre_state)
+    pre_issues = audit_issues(pre_state)
+    if pre_issues:
+        print("[WARN] Pre-delete stores are incomplete or inconsistent; continuing with "
+              "scoped cleanup so a retry can finish it: " + "; ".join(pre_issues))
+
+    delete_errors = []
+    try:
+        es_deleted = delete_opensearch_synthetic_docs(
+            es_host, index, pre_state["job_id_field"], job_id
+        )
+        print(f"[INFO] OpenSearch: deleted {es_deleted} document(s)")
+    except ValueError as e:
+        delete_errors.append(scrub_sensitive(str(e)))
+        print(f"[WARN] {delete_errors[-1]}", file=sys.stderr)
+
+    try:
+        pg_deleted = delete_postgres_synthetic_associations(db_kv)
+        print(f"[INFO] Postgres: deleted {pg_deleted} row(s)")
+    except ValueError as e:
+        delete_errors.append(scrub_sensitive(str(e)))
+        print(f"[WARN] {delete_errors[-1]}", file=sys.stderr)
+
+    refresh_index(es_host, index)
+    try:
+        post_state = audit_synthetic_state(es_host, index, db_kv)
+    except ValueError as e:
+        details = f"; delete request errors: {'; '.join(delete_errors)}" if delete_errors else ""
+        sys.exit(f"post-delete audit failed: {scrub_sensitive(str(e))}{details}")
+    print_audit_snapshot("Post-delete", post_state)
+
+    residual_issues = audit_issues(post_state, set())
+    if not audit_is_empty(post_state):
+        details = residual_issues + delete_errors
+        sys.exit("[RESULT] Removal failed; synthetic data remains or could not be verified: "
+                 + "; ".join(details))
+    if delete_errors:
+        print("[WARN] A delete request reported an error, but post-delete audit verified "
+              "absence from both stores: " + "; ".join(delete_errors))
+    print("[RESULT] Removal verified: no synthetic data remains in OpenSearch or Postgres.")
 
 
 def do_ingest(args, es_host, index, db_kv):
     total_now = current_total()
     remaining = max(TARGET_TOTAL - total_now, 0)
     if remaining == 0:
+        try:
+            state = audit_synthetic_state(es_host, index, db_kv)
+        except ValueError as e:
+            sys.exit(f"pre-ingest audit failed: {scrub_sensitive(str(e))}")
+        issues = audit_issues(state)
+        if issues:
+            sys.exit("pre-ingest audit failed: " + "; ".join(issues))
         print(f"[INFO] robot {ROBOT_ID} is already at or above the ~{TARGET_TOTAL} target "
-              f"(current: {total_now}) - nothing to add.")
+              f"(current: {total_now}); synthetic data audit passed - nothing to add.")
         return
 
     if args.probe:
@@ -513,25 +818,24 @@ def do_ingest(args, es_host, index, db_kv):
     else:
         n_runs = remaining
 
-    # CONFIRMED ON A REAL RUN: re-running while synthetic data already exists does NOT
-    # idempotently extend it - perfload's run index always restarts at 1 against the same
-    # run-id base, and its OpenSearch document _id folds in a wall-clock timestamp seeded
-    # fresh each invocation (internal/parser/hermit.go + internal/utils/hash.go), so the same
-    # run_id gets a different _id every time, "create" never 409s, and OpenSearch ends up with
-    # duplicate documents (Postgres is fine - it upserts on run_id). There is no flag that lets
-    # a later invocation "continue" past what an earlier one wrote - the only safe way to add
-    # more is to remove the existing synthetic data first, then ingest the full new amount in
-    # one shot. This refusal is therefore unconditional (no --probe/--runs bypass) unless
-    # --force is passed, and --force is an informed choice to create duplicates, not a safe one.
-    already = synthetic_count(es_host, index)
-    if already > 0 and not args.force:
-        sys.exit(f"already ingested: {already} synthetic document(s) with job_id "
-                 f"{SYNTHETIC_JOB_ID_FMT.format(robot_id=ROBOT_ID)} already exist for robot "
-                 f"{ROBOT_ID} - a new ingest here would DUPLICATE OpenSearch documents, not "
-                 f"extend them (confirmed on a real run). Remove the existing synthetic data "
-                 f"first, then re-run this ingest for the full amount you need:\n"
-                 f"  ./cloud-ingest.sh --env {ENV} --remove --confirm-delete\n"
-                 f"Pass --force instead only if you specifically intend to add duplicates anyway.")
+    expected_run_ids = set(range(RUN_ID_BASE + 1, RUN_ID_BASE + n_runs + 1))
+    try:
+        pre_state = audit_synthetic_state(es_host, index, db_kv)
+    except ValueError as e:
+        sys.exit(f"pre-ingest audit failed: {scrub_sensitive(str(e))}")
+    if not audit_is_empty(pre_state):
+        issues = audit_issues(pre_state, expected_run_ids)
+        if issues:
+            sys.exit("pre-ingest audit found partial or conflicting synthetic data; "
+                     "no write was attempted: " + "; ".join(issues))
+        if args.dry_run:
+            label = "Runs (probe)" if args.probe else "Runs to add"
+            print_plan(n_runs, total_now, label=label)
+            print("(--dry-run: nothing written, perfload not invoked)")
+        else:
+            print(f"[INFO] requested synthetic batch of {n_runs} run(s) is already complete "
+                  f"in OpenSearch and Postgres - verified no-op.")
+        return
 
     label = "Runs (probe)" if args.probe else "Runs to add"
     print_plan(n_runs, total_now, label=label)
@@ -577,51 +881,46 @@ def do_ingest(args, es_host, index, db_kv):
     expected_delta = n_runs * (POINTS_PER_RUN + 1)
     raw_after = wait_for_expected_doc_count(es_host, index, raw_before, expected_delta)
     final_delta = raw_after - raw_before
-    pg_count = pg_association_count(db_kv)
+    try:
+        post_state = audit_synthetic_state(es_host, index, db_kv)
+    except ValueError as e:
+        sys.exit(f"post-ingest audit failed: {scrub_sensitive(str(e))}")
+    post_issues = audit_issues(post_state, expected_run_ids)
+    os_run_count = len(post_state["opensearch_counts"])
+    os_doc_count = sum(post_state["opensearch_counts"].values())
+    pg_run_count = len(post_state["postgres_counts"])
+    pg_count = sum(post_state["postgres_counts"].values())
     rank_total = current_total()
-
-    # The ingester writes this association BEFORE its OpenSearch bulk, so run_id >= RUN_ID_BASE
-    # can hold rows from an earlier attempt too (confirmed on a real run: a partially-failed
-    # full-size attempt left rows this probe's count then included) - n_runs is only this run's
-    # own minimum, never the whole expected count.
-    pg_note = "" if pg_count == n_runs else (
-        f" - more than this run's {n_runs}; rows from an earlier attempt (e.g. a partially-"
-        f"failed larger run) can still be present here and aren't necessarily a problem"
-    )
 
     print(f"""
 === VERIFICATION ===
 OpenSearch raw doc count for robot {ROBOT_ID}: {raw_before} -> {raw_after} (delta {final_delta}, expected {expected_delta})
-Postgres weld_presets_associations (robot {ROBOT_ID}, run_id >= {RUN_ID_BASE}): {pg_count} (expected at least {n_runs}){pg_note}
+OpenSearch synthetic runs/documents: {os_run_count}/{n_runs} runs, {os_doc_count}/{expected_delta} documents
+Postgres synthetic runs/associations: {pg_run_count}/{n_runs} runs, {pg_count}/{n_runs} rows
 perf-rank-robots.sh --target {ENV} --robot-id {ROBOT_ID}: {rank_total} (expected {total_now + n_runs})
 """)
 
-    delta_ok = final_delta == expected_delta
-    ok = delta_ok and pg_count >= n_runs and rank_total == total_now + n_runs
-    if ok:
-        new_remaining = max(TARGET_TOTAL - rank_total, 0)
-        print(f"[RESULT] Verification passed.")
-        if new_remaining > 0:
-            # NOT a "continue from here" command - this run's synthetic data still exists, so
-            # a follow-up --runs N invocation would duplicate it (see the already-ingested
-            # refusal above). The only safe way to add the rest is to remove this run's data
-            # and ingest the FULL original remaining amount (this run's n_runs + what's still
-            # left) in one shot - never just the delta.
-            print(f"This run's synthetic data still exists - a follow-up ingest here would "
-                  f"DUPLICATE it, not extend it (see the already-ingested check). To reach the "
-                  f"~{TARGET_TOTAL} target, remove it first, then ingest the full {remaining} "
-                  f"remaining runs in one shot:\n"
-                  f"  ./cloud-ingest.sh --env {ENV} --remove --confirm-delete\n"
-                  f"  ./cloud-ingest.sh --env {ENV} --runs {remaining} --template {args.template}")
-        else:
-            print(f"Robot {ROBOT_ID} is now at the ~{TARGET_TOTAL} target - nothing more to add.")
+    verification_errors = list(post_issues)
+    if final_delta != expected_delta:
+        verification_errors.append(
+            f"OpenSearch robot document delta was {final_delta}; expected {expected_delta}"
+        )
+    if rank_total != total_now + n_runs:
+        verification_errors.append(
+            f"rank total was {rank_total}; expected {total_now + n_runs}"
+        )
+    if verification_errors:
+        sys.exit("[RESULT] Verification failed: " + "; ".join(verification_errors))
+
+    new_remaining = max(TARGET_TOTAL - rank_total, 0)
+    print("[RESULT] Verification passed.")
+    if new_remaining > 0:
+        print(f"To reach the ~{TARGET_TOTAL} target, remove this complete batch, then ingest "
+              f"the full {remaining} remaining runs in one shot:\n"
+              f"  ./cloud-ingest.sh --env {ENV} --remove --confirm-delete\n"
+              f"  ./cloud-ingest.sh --env {ENV} --runs {remaining} --template {args.template}")
     else:
-        if not delta_ok and final_delta < expected_delta:
-            print(f"[RESULT] OpenSearch count is short by {expected_delta - final_delta} after a "
-                  f"forced refresh and up to 10s of polling - a real shortfall, not a refresh-"
-                  f"timing artifact.")
-        print(f"[RESULT] Verification did NOT clearly pass - review the numbers above and the "
-              f"log at {log_path} before running more.")
+        print(f"Robot {ROBOT_ID} is now at the ~{TARGET_TOTAL} target - nothing more to add.")
 
 
 def main():
@@ -629,10 +928,6 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                      help="ingest mode: print the plan, write nothing. Accepted (as a no-op) "
                           "with --remove too, which is dry by default already.")
-    ap.add_argument("--force", action="store_true", help="skip the already-ingested refusal - "
-                     "an informed choice to create DUPLICATE OpenSearch documents (confirmed "
-                     "on a real run that re-ingesting does not idempotently extend), not a "
-                     "safe default; --remove first is the safe way to add more")
     ap.add_argument("--runs", type=int, help="ingest exactly this many runs (capped at however "
                      "many are left to reach the target); default is however many are left")
     ap.add_argument("--probe", action="store_true", help="shorthand for --runs 1, plus the "

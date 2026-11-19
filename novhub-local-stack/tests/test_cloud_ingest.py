@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import psycopg2
+
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 os.environ.update({
@@ -53,6 +55,85 @@ SCHEMA = {
     **FEEDBACK_TYPES,
     "job_id": "String",
 }
+
+
+def empty_audit_state():
+    return {
+        "run_id_field": "run_id",
+        "job_id_field": "weld_session.job_id.keyword",
+        "opensearch_counts": {},
+        "opensearch_unkeyed_docs": 0,
+        "postgres_counts": {},
+    }
+
+
+def complete_audit_state(run_count):
+    run_ids = range(
+        cloud_ingest.RUN_ID_BASE + 1,
+        cloud_ingest.RUN_ID_BASE + run_count + 1,
+    )
+    return {
+        "run_id_field": "run_id",
+        "job_id_field": "weld_session.job_id.keyword",
+        "opensearch_counts": {
+            run_id: cloud_ingest.POINTS_PER_RUN + 1 for run_id in run_ids
+        },
+        "opensearch_unkeyed_docs": 0,
+        "postgres_counts": {
+            run_id: 1 for run_id in range(
+                cloud_ingest.RUN_ID_BASE + 1,
+                cloud_ingest.RUN_ID_BASE + run_count + 1,
+            )
+        },
+    }
+
+
+class FakeResponse:
+    def __init__(self, payload, ok=True, status_code=200, text=""):
+        self.payload = payload
+        self.ok = ok
+        self.status_code = status_code
+        self.text = text
+
+    def json(self):
+        return self.payload
+
+
+class FakeCursor:
+    def __init__(self, rows, rowcount=0):
+        self.rows = rows
+        self.rowcount = rowcount
+        self.query = None
+        self.params = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def execute(self, query, params):
+        self.query = query
+        self.params = params
+
+    def fetchall(self):
+        return self.rows
+
+
+class FakeConnection:
+    def __init__(self, rows, rowcount=0):
+        self.fake_cursor = FakeCursor(rows, rowcount)
+        self.closed = False
+        self.committed = False
+
+    def cursor(self):
+        return self.fake_cursor
+
+    def commit(self):
+        self.committed = True
+
+    def close(self):
+        self.closed = True
 
 
 def make_template():
@@ -163,26 +244,374 @@ class CloudIngestTemplateTests(unittest.TestCase):
                 self.assertEqual(len(json.load(file)["values"]), 50)
 
     def test_dry_run_does_not_transform_template(self):
-        args = Namespace(probe=False, runs=1, force=False, dry_run=True, template=None)
+        args = Namespace(probe=False, runs=1, dry_run=True, template=None)
         with (
             patch.object(cloud_ingest, "current_total", return_value=100),
-            patch.object(cloud_ingest, "synthetic_count", return_value=0),
+            patch.object(cloud_ingest, "audit_synthetic_state", return_value=empty_audit_state()),
             patch.object(cloud_ingest, "print_plan"),
             patch.object(cloud_ingest, "build_varied_template") as transform,
+            patch.object(cloud_ingest, "run_ingester_tee_scrubbed") as run_ingester,
         ):
             cloud_ingest.do_ingest(args, None, "index", None)
         transform.assert_not_called()
+        run_ingester.assert_not_called()
 
-    def test_existing_synthetic_data_stops_before_transformation(self):
-        args = Namespace(probe=False, runs=1, force=False, dry_run=False, template="unused.json")
+    def test_partial_synthetic_data_stops_before_ingester(self):
+        args = Namespace(probe=False, runs=1, dry_run=False, template="unused.json")
+        partial_state = {
+            "opensearch_counts": {cloud_ingest.RUN_ID_BASE + 1: 50},
+            "opensearch_unkeyed_docs": 0,
+            "postgres_counts": {},
+        }
         with (
             patch.object(cloud_ingest, "current_total", return_value=100),
-            patch.object(cloud_ingest, "synthetic_count", return_value=1),
+            patch.object(cloud_ingest, "audit_synthetic_state", return_value=partial_state),
             patch.object(cloud_ingest, "build_varied_template") as transform,
+            patch.object(cloud_ingest, "run_ingester_tee_scrubbed") as run_ingester,
         ):
-            with self.assertRaises(SystemExit):
+            with self.assertRaisesRegex(SystemExit, "partial or conflicting"):
                 cloud_ingest.do_ingest(args, None, "index", None)
         transform.assert_not_called()
+        run_ingester.assert_not_called()
+
+    def test_complete_batch_is_verified_noop_before_template_generation(self):
+        args = Namespace(probe=False, runs=1, dry_run=False, template="unused.json")
+        with (
+            patch.object(cloud_ingest, "current_total", return_value=100),
+            patch.object(cloud_ingest, "audit_synthetic_state",
+                         return_value=complete_audit_state(1)),
+            patch.object(cloud_ingest, "print_plan") as print_plan,
+            patch.object(cloud_ingest, "build_varied_template") as transform,
+            patch.object(cloud_ingest, "run_ingester_tee_scrubbed") as run_ingester,
+        ):
+            cloud_ingest.do_ingest(args, None, "index", None)
+        print_plan.assert_not_called()
+        transform.assert_not_called()
+        run_ingester.assert_not_called()
+
+    def test_empty_batch_is_ingested_and_post_audit_is_required(self):
+        args = Namespace(probe=False, runs=1, dry_run=False, template="sample.json")
+        states = [empty_audit_state(), complete_audit_state(1)]
+        with (
+            patch.object(cloud_ingest, "current_total", side_effect=[100, 101]),
+            patch.object(cloud_ingest, "audit_synthetic_state", side_effect=states),
+            patch.object(cloud_ingest, "read_json_file", return_value=make_template()),
+            patch.object(cloud_ingest, "load_range_map", return_value=self.range_map),
+            patch.object(cloud_ingest, "build_varied_template", return_value=make_template()),
+            patch.object(cloud_ingest, "raw_robot_doc_count", return_value=1000),
+            patch.object(cloud_ingest, "wait_for_expected_doc_count", return_value=1051),
+            patch.object(cloud_ingest, "run_ingester_tee_scrubbed",
+                         return_value=(0, "test-log")) as run_ingester,
+        ):
+            cloud_ingest.do_ingest(args, "example", "index", {
+                "name": "test-db", "username": "test-user", "password": "test-password",
+            })
+        run_ingester.assert_called_once()
+
+    def test_post_ingest_audit_mismatch_returns_failure(self):
+        args = Namespace(probe=False, runs=1, dry_run=False, template="sample.json")
+        partial_state = {
+            "opensearch_counts": {cloud_ingest.RUN_ID_BASE + 1: 50},
+            "opensearch_unkeyed_docs": 0,
+            "postgres_counts": {cloud_ingest.RUN_ID_BASE + 1: 1},
+        }
+        with (
+            patch.object(cloud_ingest, "current_total", side_effect=[100, 101]),
+            patch.object(cloud_ingest, "audit_synthetic_state",
+                         side_effect=[empty_audit_state(), partial_state]),
+            patch.object(cloud_ingest, "read_json_file", return_value=make_template()),
+            patch.object(cloud_ingest, "load_range_map", return_value=self.range_map),
+            patch.object(cloud_ingest, "build_varied_template", return_value=make_template()),
+            patch.object(cloud_ingest, "raw_robot_doc_count", return_value=1000),
+            patch.object(cloud_ingest, "wait_for_expected_doc_count", return_value=1051),
+            patch.object(cloud_ingest, "run_ingester_tee_scrubbed",
+                         return_value=(0, "test-log")) as run_ingester,
+        ):
+            with self.assertRaisesRegex(SystemExit, "Verification failed"):
+                cloud_ingest.do_ingest(args, "example", "index", {
+                    "name": "test-db", "username": "test-user", "password": "test-password",
+                })
+        run_ingester.assert_called_once()
+
+
+class CloudIngestAuditTests(unittest.TestCase):
+    def mapping(self, run_id_type="long", job_id_mapping=None):
+        if job_id_mapping is None:
+            job_id_mapping = {"type": "keyword"}
+        return {
+            "synthetic-index": {
+                "mappings": {
+                    "properties": {
+                        "run_id": {"type": run_id_type},
+                        "weld_session": {
+                            "properties": {"job_id": job_id_mapping},
+                        },
+                    },
+                },
+            },
+        }
+
+    def test_resolves_numeric_run_id_and_text_keyword_job_id(self):
+        mapping = self.mapping(
+            job_id_mapping={
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}},
+            }
+        )
+        self.assertEqual(
+            cloud_ingest.resolve_audit_fields(mapping),
+            ("run_id", "weld_session.job_id.keyword"),
+        )
+
+    def test_mapping_rejects_missing_and_inconsistent_fields(self):
+        missing = self.mapping()
+        del missing["synthetic-index"]["mappings"]["properties"]["run_id"]
+        with self.assertRaisesRegex(ValueError, "missing field run_id"):
+            cloud_ingest.resolve_audit_fields(missing)
+
+        inconsistent = self.mapping()
+        inconsistent["second-index"] = self.mapping("keyword")["synthetic-index"]
+        with self.assertRaisesRegex(ValueError, "mappings disagree"):
+            cloud_ingest.resolve_audit_fields(inconsistent)
+
+    def test_automatic_audit_uses_mapping_and_groups_both_stores(self):
+        search_response = {
+            "timed_out": False,
+            "_shards": {"failed": 0},
+            "aggregations": {
+                "runs": {
+                    "buckets": [{"key": cloud_ingest.RUN_ID_BASE + 1, "doc_count": 51}],
+                    "sum_other_doc_count": 0,
+                },
+                "missing_run_id": {"doc_count": 0},
+            },
+        }
+        connection = FakeConnection([(cloud_ingest.RUN_ID_BASE + 1, 1)])
+        with (
+            patch.object(
+                cloud_ingest,
+                "sigv4_request",
+                side_effect=[
+                    (FakeResponse(self.mapping()), None),
+                    (FakeResponse(search_response), None),
+                ],
+            ) as request,
+            patch.object(cloud_ingest, "pg_connect", return_value=connection),
+        ):
+            state = cloud_ingest.audit_synthetic_state("example", "synthetic-index", {})
+
+        expected_state = complete_audit_state(1)
+        expected_state["job_id_field"] = "weld_session.job_id"
+        self.assertEqual(state, expected_state)
+        self.assertEqual(request.call_args_list[0].args[0], "GET")
+        self.assertEqual(request.call_args_list[0].args[3], "/synthetic-index/_mapping")
+        self.assertEqual(request.call_args_list[1].args[3], "/synthetic-index/_search")
+        search_body = json.loads(request.call_args_list[1].kwargs["data"])
+        self.assertEqual(
+            search_body["query"]["term"],
+            {"weld_session.job_id": "PERF-ING-JOB-1555"},
+        )
+        self.assertEqual(
+            search_body["aggs"]["runs"]["terms"]["field"],
+            "run_id",
+        )
+        self.assertEqual(connection.fake_cursor.params, (1555, cloud_ingest.RUN_ID_BASE))
+        self.assertTrue(connection.closed)
+
+    def test_mapping_store_error_stops_before_postgres(self):
+        with (
+            patch.object(cloud_ingest, "signed_opensearch_json",
+                         side_effect=ValueError("mapping unavailable")),
+            patch.object(cloud_ingest, "postgres_run_counts") as postgres_counts,
+        ):
+            with self.assertRaisesRegex(ValueError, "mapping unavailable"):
+                cloud_ingest.audit_synthetic_state("example", "index", {})
+        postgres_counts.assert_not_called()
+
+    def test_postgres_connection_error_is_reported(self):
+        with patch.object(
+            cloud_ingest, "pg_connect", side_effect=psycopg2.OperationalError("database unavailable")
+        ):
+            with self.assertRaisesRegex(ValueError, "Postgres synthetic-run audit failed"):
+                cloud_ingest.postgres_run_counts({})
+
+    def test_audit_reports_missing_extra_and_wrong_multiplicities(self):
+        first_id = cloud_ingest.RUN_ID_BASE + 1
+        second_id = cloud_ingest.RUN_ID_BASE + 2
+        third_id = cloud_ingest.RUN_ID_BASE + 3
+        state = {
+            "opensearch_counts": {first_id: 50, second_id: 51},
+            "opensearch_unkeyed_docs": 0,
+            "postgres_counts": {first_id: 1, third_id: 2},
+        }
+        issues = cloud_ingest.audit_issues(state, {first_id})
+        report = "; ".join(issues)
+        self.assertIn(f"OpenSearch has unexpected run IDs: {second_id}", report)
+        self.assertIn(f"Postgres has unexpected run IDs: {third_id}", report)
+        self.assertIn(f"OpenSearch run {first_id} has 50 documents", report)
+        self.assertIn(f"Postgres run {third_id} has 2 association rows", report)
+
+        missing_state = {
+            "opensearch_counts": {first_id: 51},
+            "opensearch_unkeyed_docs": 0,
+            "postgres_counts": {first_id: 1},
+        }
+        self.assertTrue(
+            any("OpenSearch is missing run IDs" in issue
+                for issue in cloud_ingest.audit_issues(missing_state, {first_id, second_id}))
+        )
+        self.assertTrue(
+            any("Postgres is missing run IDs" in issue
+                for issue in cloud_ingest.audit_issues(missing_state, {first_id, second_id}))
+        )
+
+        duplicate_state = {
+            "opensearch_counts": {first_id: 102},
+            "opensearch_unkeyed_docs": 0,
+            "postgres_counts": {first_id: 1},
+        }
+        self.assertIn(
+            f"OpenSearch run {first_id} has 102 documents",
+            "; ".join(cloud_ingest.audit_issues(duplicate_state, {first_id})),
+        )
+
+
+class CloudIngestRemovalTests(unittest.TestCase):
+    def run_confirmed_remove(self, pre_state, post_state, es_result, pg_rowcount):
+        connection = FakeConnection([], rowcount=pg_rowcount)
+        with (
+            patch("builtins.input", return_value="1555"),
+            patch.object(cloud_ingest, "audit_synthetic_state",
+                         side_effect=[pre_state, post_state]) as audit,
+            patch.object(cloud_ingest, "sigv4_request",
+                         return_value=(FakeResponse(es_result), None)) as request,
+            patch.object(cloud_ingest, "pg_connect", return_value=connection),
+            patch.object(cloud_ingest, "refresh_index") as refresh,
+        ):
+            cloud_ingest.do_remove(Namespace(confirm_delete=True), "example", "index", {})
+        return connection, request, refresh, audit
+
+    def test_removal_deletes_scoped_records_and_verifies_absence(self):
+        pre_state = complete_audit_state(2)
+        connection, request, refresh, audit = self.run_confirmed_remove(
+            pre_state,
+            empty_audit_state(),
+            {"deleted": 102, "timed_out": False, "failures": []},
+            2,
+        )
+
+        self.assertEqual(audit.call_count, 2)
+        self.assertEqual(request.call_args.args[3], "/index/_delete_by_query")
+        query = json.loads(request.call_args.kwargs["data"])
+        self.assertEqual(
+            query,
+            {"query": {"term": {"weld_session.job_id.keyword": "PERF-ING-JOB-1555"}}},
+        )
+        self.assertEqual(
+            connection.fake_cursor.query,
+            "DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id >= %s",
+        )
+        self.assertEqual(connection.fake_cursor.params, (1555, cloud_ingest.RUN_ID_BASE))
+        self.assertTrue(connection.committed)
+        self.assertTrue(connection.closed)
+        refresh.assert_called_once_with("example", "index")
+
+    def test_repeated_removal_of_empty_stores_is_verified_noop(self):
+        connection, request, _, _ = self.run_confirmed_remove(
+            empty_audit_state(),
+            empty_audit_state(),
+            {"deleted": 0, "timed_out": False, "failures": []},
+            0,
+        )
+        self.assertTrue(request.called)
+        self.assertTrue(connection.committed)
+        self.assertEqual(connection.fake_cursor.params, (1555, cloud_ingest.RUN_ID_BASE))
+
+    def test_removal_continues_when_either_store_is_already_empty(self):
+        run_id = cloud_ingest.RUN_ID_BASE + 1
+        states = [
+            {
+                **empty_audit_state(),
+                "opensearch_counts": {run_id: 51},
+            },
+            {
+                **empty_audit_state(),
+                "postgres_counts": {run_id: 1},
+            },
+        ]
+        for state in states:
+            with self.subTest(opensearch=bool(state["opensearch_counts"])):
+                connection, request, _, _ = self.run_confirmed_remove(
+                    state,
+                    empty_audit_state(),
+                    {"deleted": sum(state["opensearch_counts"].values()),
+                     "timed_out": False, "failures": []},
+                    sum(state["postgres_counts"].values()),
+                )
+                self.assertTrue(request.called)
+                self.assertTrue(connection.committed)
+
+    def test_store_delete_error_still_attempts_other_store_and_fails_if_data_remains(self):
+        pre_state = complete_audit_state(1)
+        residual_state = {
+            **pre_state,
+            "postgres_counts": {},
+        }
+        connection = FakeConnection([], rowcount=1)
+        with (
+            patch("builtins.input", return_value="1555"),
+            patch.object(cloud_ingest, "audit_synthetic_state",
+                         side_effect=[pre_state, residual_state]) as audit,
+            patch.object(cloud_ingest, "sigv4_request",
+                         return_value=(None, "temporary OpenSearch failure")),
+            patch.object(cloud_ingest, "pg_connect", return_value=connection),
+            patch.object(cloud_ingest, "refresh_index") as refresh,
+        ):
+            with self.assertRaisesRegex(SystemExit, "Removal failed"):
+                cloud_ingest.do_remove(Namespace(confirm_delete=True), "example", "index", {})
+
+        self.assertEqual(audit.call_count, 2)
+        self.assertTrue(connection.committed)
+        refresh.assert_called_once()
+
+    def test_postgres_delete_error_is_reported_after_opensearch_cleanup(self):
+        pre_state = complete_audit_state(1)
+        residual_state = {
+            **pre_state,
+            "opensearch_counts": {},
+        }
+        with (
+            patch("builtins.input", return_value="1555"),
+            patch.object(cloud_ingest, "audit_synthetic_state",
+                         side_effect=[pre_state, residual_state]) as audit,
+            patch.object(cloud_ingest, "sigv4_request",
+                         return_value=(FakeResponse({
+                             "deleted": 51, "timed_out": False, "failures": [],
+                         }), None)) as request,
+            patch.object(
+                cloud_ingest,
+                "pg_connect",
+                side_effect=psycopg2.OperationalError("temporary Postgres failure"),
+            ),
+            patch.object(cloud_ingest, "refresh_index") as refresh,
+        ):
+            with self.assertRaisesRegex(SystemExit, "Removal failed"):
+                cloud_ingest.do_remove(Namespace(confirm_delete=True), "example", "index", {})
+
+        self.assertEqual(audit.call_count, 2)
+        request.assert_called_once()
+        refresh.assert_called_once()
+
+    def test_remove_dry_run_does_not_audit_or_delete(self):
+        with (
+            patch.object(cloud_ingest, "audit_synthetic_state") as audit,
+            patch.object(cloud_ingest, "sigv4_request") as request,
+            patch.object(cloud_ingest, "pg_connect") as pg_connect,
+        ):
+            cloud_ingest.do_remove(Namespace(confirm_delete=False), "example", "index", {})
+        audit.assert_not_called()
+        request.assert_not_called()
+        pg_connect.assert_not_called()
 
 
 if __name__ == "__main__":
