@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
   cat <<USAGE
-Usage: cloud-ingest.sh --env dev [--probe | --runs N] [--dry-run] [--force] --template <path>
+Usage: cloud-ingest.sh --env dev [--probe | --runs N] [--dry-run] --template <path>
        cloud-ingest.sh --env dev --remove [--confirm-delete]
 
 HUB-106: wraps opensearch-ingester's perfload tool to add synthetic runs to
@@ -27,18 +27,11 @@ Refuses up front, before anything runs, unless:
   - DEV_INGEST_ROBOT_ID is set in cloud-env.env
   - robot's current total is read fresh each run (the "daemon-free path" -
     perf-rank-robots.sh --target <env> --robot-id <id>), never assumed
-  - nothing with this tool's own synthetic job_id already exists for the
-    robot, for ANY run (--probe/--runs included, not just a bare run):
-    refuses "already ingested" unless --force. CONFIRMED ON A REAL RUN
-    that re-running while synthetic data exists does NOT idempotently
-    extend it - perfload's run index always restarts at 1 against the
-    same run-id base, and its OpenSearch document _id folds in a
-    wall-clock timestamp seeded fresh each invocation, so the same
-    run_id gets a different _id every time and OpenSearch ends up with
-    DUPLICATE documents (Postgres is fine - it upserts on run_id). There
-    is no way to "continue" past an earlier invocation - --remove first,
-    then ingest the full new amount in one shot, is the only safe way to
-    add more (see --runs below).
+  - OpenSearch's mapping and the synthetic run IDs in OpenSearch and
+    Postgres are audited before and after each add. A complete requested
+    batch is a verified no-op; an empty synthetic state may be ingested;
+    partial or conflicting state stops before writing. There is no
+    override that can bypass this check.
 
   --probe           ingest exactly ONE real run (OpenSearch docs + the
                     Postgres association), then print: the OpenSearch raw
@@ -57,15 +50,12 @@ Refuses up front, before anything runs, unless:
                     verification output as --probe, generalized to N.
                     Mutually exclusive with --probe (which is --runs 1).
                     Run-id base is always the same fixed value, and every
-                    invocation's run index restarts at 1 against it - so a
-                    LARGER N run after a smaller one does NOT extend it,
-                    it duplicates the overlapping documents (see the
-                    already-ingested refusal above).
+                    invocation's run index restarts at 1 against it - a
+                    larger request after a smaller completed batch is
+                    therefore a partial-state conflict. Remove the existing
+                    batch before ingesting a different size.
   --dry-run         print the full plan and stop - nothing written, no
                     values in the printed plan.
-  --force           skip the already-ingested refusal - an informed choice
-                    to create duplicate OpenSearch documents, not a safe
-                    default; --remove first is the safe way to add more.
   --template PATH   a real Hermit V2 sample file - same shape
                     perf-ingester-load.sh already uses locally, NOT a test
                     fixture. Required for any real (non---dry-run) ingest.
@@ -107,7 +97,7 @@ PY_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --env) ENV_NAME="$2"; shift 2 ;;
-    --dry-run|--force|--remove|--confirm-delete|--probe) PY_ARGS+=("$1"); shift ;;
+    --dry-run|--remove|--confirm-delete|--probe) PY_ARGS+=("$1"); shift ;;
     --runs) PY_ARGS+=("--runs" "$2"); shift 2 ;;
     --template) PY_ARGS+=("--template" "$2"); shift 2 ;;
     *) error "Unknown argument: $1"; exit 1 ;;
