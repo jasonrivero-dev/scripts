@@ -221,40 +221,55 @@ async function main() {
     return { ok: true, usable_ms: usableMs };
   }
 
+  // A first-visit "What's New in NovHub" tour prompt (.ant-modal-wrap, Skip/Take the Tour) -
+  // or any other Antd modal that happens to be up - intercepts clicks AND, confirmed on a real
+  // dev run, can keep the page from making ANY of its data requests at all while it's up
+  // (request_counts came back completely empty, not just the row click failing): it has to be
+  // dismissed before anything else waits or interacts, on every page, not just where a row gets
+  // clicked. Never suppress it by writing a "seen"/dismissed flag to storage - always drive the
+  // real Skip/close-icon click, the way a person would. isVisible() is a one-shot, non-waiting
+  // check - it can miss a modal that hasn't mounted yet, which is exactly what happened on that
+  // real run (a fixed 1s wait plus one isVisible() check, both too early); waitFor({state:
+  // 'visible'}) actually polls for it to show up. Antd's close animation also leaves the
+  // (now-empty) wrap in the DOM for a beat, still intercepting pointer events, so this waits for
+  // it to actually detach rather than assuming the dismiss click was instantaneous.
+  async function dismissBlockingDialog(label, waitMs = 3000) {
+    const wrap = page.locator('.ant-modal-wrap').first();
+    const appeared = await wrap.waitFor({ state: 'visible', timeout: waitMs }).then(() => true).catch(() => false);
+    if (!appeared) return;
+    console.error(`[INFO] (${label}) blocking dialog visible - dismissing`);
+    const skipBtn = page.locator('.ant-modal-wrap button:has-text("Skip")').first();
+    const closeBtn = page.locator('.ant-modal-close').first();
+    let clicked = false;
+    if (await skipBtn.isVisible().catch(() => false)) {
+      await skipBtn.click({ timeout: 2000 }).catch((e) => console.error(`[WARN] Skip click failed: ${e.message}`));
+      clicked = true;
+    } else if (await closeBtn.isVisible().catch(() => false)) {
+      await closeBtn.click({ timeout: 2000 }).catch((e) => console.error(`[WARN] close-icon click failed: ${e.message}`));
+      clicked = true;
+    } else {
+      console.error('[WARN] dialog visible but neither Skip nor close-icon matched - dumping dialog text');
+      console.error(await wrap.innerText().catch(() => '(innerText failed)'));
+    }
+    if (clicked) {
+      const detached = await wrap.waitFor({ state: 'hidden', timeout: 5000 }).then(() => true).catch(() => false);
+      console.error(detached ? `[INFO] (${label}) dialog gone` : `[WARN] (${label}) dialog still present after dismiss click`);
+    }
+  }
+
+  async function blockingDialogVisible() {
+    return page.locator('.ant-modal-wrap').first().isVisible().catch(() => false);
+  }
+
+  // Generous budget here specifically - this is the one spot a late-mounting dialog on a
+  // slower real environment is most likely to still be missed if checked too early.
+  await dismissBlockingDialog('post-navigation', 8000);
+
   if (CLICK_ROW) {
     const rowSelector = 'tr.ant-table-row[data-row-key]';
-    // A first-visit "What's New in NovHub" tour prompt (.ant-modal-wrap, Skip/Take the Tour)
-    // intercepts the click. Antd's close animation leaves the (now-empty) wrap in the DOM for
-    // a beat, still intercepting pointer events, so wait for it to actually detach rather than
-    // a flat sleep - and re-check right before the row click in case it reappears.
-    async function dismissTourModal(label) {
-      const wrap = page.locator('.ant-modal-wrap').first();
-      const stillThere = await wrap.isVisible({ timeout: 2000 }).catch(() => false);
-      if (!stillThere) return;
-      console.error(`[INFO] (${label}) tour modal visible - dismissing`);
-      const skipBtn = page.locator('.ant-modal-wrap button:has-text("Skip")').first();
-      const closeBtn = page.locator('.ant-modal-close').first();
-      let clicked = false;
-      if (await skipBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await skipBtn.click({ timeout: 2000 }).catch((e) => console.error(`[WARN] Skip click failed: ${e.message}`));
-        clicked = true;
-      } else if (await closeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await closeBtn.click({ timeout: 2000 }).catch((e) => console.error(`[WARN] close-icon click failed: ${e.message}`));
-        clicked = true;
-      } else {
-        console.error('[WARN] modal visible but neither Skip nor close-icon matched - dumping modal text');
-        console.error(await wrap.innerText().catch(() => '(innerText failed)'));
-      }
-      if (clicked) {
-        const detached = await wrap.waitFor({ state: 'hidden', timeout: 5000 }).then(() => true).catch(() => false);
-        console.error(detached ? `[INFO] (${label}) modal gone` : `[WARN] (${label}) modal still present after dismiss click`);
-      }
-    }
     try {
-      await page.waitForTimeout(1000); // the tour prompt mounts shortly after the page, not instantly
-      await dismissTourModal('pre-click');
       await page.waitForSelector(rowSelector, { timeout: 15000 });
-      await dismissTourModal('right-before-click'); // in case it (re)appeared while waiting for rows
+      await dismissBlockingDialog('before-list-usable', 2000); // in case it (re)appeared while waiting for rows
 
       const listSettled = await waitForTableUsable(page, LIST_TABLE_SELECTOR, LIST_QC_COLUMN_INDEX);
       listUsableMs = listSettled ? Date.now() - navStart : null;
@@ -263,11 +278,18 @@ async function main() {
         : `[WARN] LIST never reached "QC Status filled + stable" within ${DOM_USABLE_TIMEOUT_MS}ms - list_usable_ms will be null`);
 
       if (SET_DATE_RANGE) {
+        await dismissBlockingDialog('before-range-change', 2000);
         const applied = await setDateRangeViaUI();
         dateRangeApplied = applied.ok;
         rangeChangeUsableMs = applied.usable_ms;
+        if (!applied.ok) {
+          const stillBlocked = await blockingDialogVisible();
+          console.error(`[ERROR] date range step failed${stillBlocked ? ' - a blocking dialog is still visible, it likely intercepted the range picker' : ''}`);
+          await page.screenshot({ path: path.join(OUT_DIR, `${PAGE}-range-change-failure.png`) }).catch(() => {});
+        }
       }
 
+      await dismissBlockingDialog('before-row-click', 2000);
       const clickStart = Date.now();
       await page.click(rowSelector, { timeout: 8000 });
       console.error(`[INFO] clicked first row (now at ${page.url()}) - detail view (WeldInformation) should now fire its own N+1`);
@@ -279,7 +301,8 @@ async function main() {
         ? `[INFO] DETAIL usable (QC Status filled, row count stable) ${detailUsableMs}ms after the click`
         : `[WARN] DETAIL never reached "QC Status filled + stable" within ${DOM_USABLE_TIMEOUT_MS}ms - detail_usable_ms will be null`);
     } catch (e) {
-      console.error(`[WARN] could not find/click a row (${rowSelector}) - continuing with list-view traffic only: ${e.message}`);
+      const stillBlocked = await blockingDialogVisible();
+      console.error(`[ERROR] could not find/click a row (${rowSelector})${stillBlocked ? ' - a blocking dialog is still visible, it likely intercepted this' : ''} - continuing with list-view traffic only: ${e.message}`);
       await page.screenshot({ path: path.join(OUT_DIR, `${PAGE}-row-click-failure.png`) }).catch(() => {});
     }
   }
@@ -322,6 +345,22 @@ async function main() {
   fs.writeFileSync(path.join(OUT_DIR, `${PAGE}-metrics.json`), JSON.stringify(metrics, null, 2));
   console.log(JSON.stringify(metrics, null, 2));
   console.error(`[INFO] saved: ${harPath}, ${path.join(OUT_DIR, PAGE + '-trace.zip')}, ${path.join(OUT_DIR, PAGE + '-metrics.json')}`);
+
+  // An invalid trial must never look like a result - metrics.json/HAR/trace are still written
+  // above (for inspection), but a caller counting trials needs a non-zero exit, not a quiet 0
+  // next to an empty/unapplied metrics file (confirmed on a real run: a blocked page produced
+  // exactly this - request_counts {} and date_range_used.applied false - and exited 0).
+  const invalidReasons = [];
+  if (Object.keys(requestCounts).length === 0) {
+    invalidReasons.push('request_counts is empty - no weld_run/weld_test_reports/weld_stats request was ever observed; this capture did not measure anything real');
+  }
+  if (SET_DATE_RANGE && !dateRangeApplied) {
+    invalidReasons.push(`date range was never applied (requested ${RANGE_START} to ${RANGE_END}) - date_range_used.applied is false`);
+  }
+  if (invalidReasons.length > 0) {
+    throw new Error(`invalid trial (the files above were still written for inspection, but this run must NOT be treated as a result):\n` +
+      invalidReasons.map((r) => `  - ${r}`).join('\n'));
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
