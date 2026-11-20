@@ -52,6 +52,8 @@ class CloudLocalTests(unittest.TestCase):
             runtime_env = runtime_dir / ".env"
             self.assertEqual(stat.S_IMODE(runtime_env.stat().st_mode), 0o600)
             self.assertEqual((runtime_dir / "db_init.sql").resolve(), db_init)
+            novapp_runtime_dir = novhub / ".state" / "cloud-local" / "novapp-runtime"
+            self.assertEqual(stat.S_IMODE(novapp_runtime_dir.stat().st_mode), 0o700)
             content = runtime_env.read_text(encoding="utf-8")
             self.assertIn("DB_PASSWORD='test password#value'\n", content)
             self.assertIn("DB_HOST=127.0.0.1\n", content)

@@ -159,7 +159,8 @@ None. In particular, the launcher must not call NovApi's admin migration route.
 
 ### Step 3: Document and verify manual and automated AFTER capture
 
-- **Files:** `novhub-local-stack/README.md`,
+- **Files:** `novhub-local-stack/CLOUD-LOCAL-LAUNCHER.md`,
+  `novhub-local-stack/README.md`,
   `novhub-local-stack/tests/test_cloud_local.py`
 - **What:** Document the dev-local setup and owner-run sequence. Copy
   `perf-targets.dev.env` to `perf-targets.dev-local.env`, change only
