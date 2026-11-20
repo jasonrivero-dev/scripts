@@ -2,9 +2,12 @@ NOVAPI_REPO="${NOVAPI_REPO:-$HOME/dev/NovApi}"
 NOVAPP_REPO="${NOVAPP_REPO:-$HOME/dev/novhub}"
 CLOUD_LOCAL_STATE_DIR="$NOVHUB_ROOT/.state/cloud-local"
 CLOUD_LOCAL_NOVAPI_RUNTIME_DIR="$CLOUD_LOCAL_STATE_DIR/novapi-runtime"
+CLOUD_LOCAL_NOVAPP_RUNTIME_DIR="$CLOUD_LOCAL_STATE_DIR/novapp-runtime"
 CLOUD_LOCAL_NOVAPI_ENV_FILE="$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR/.env"
 CLOUD_LOCAL_DB_PORT=3000
 CLOUD_LOCAL_APP_PORT=5173
+CLOUD_LOCAL_API_PROCESS=cloud-local-novapi
+CLOUD_LOCAL_APP_PROCESS=cloud-local-novapp
 
 cloud_local_preflight() {
   local env_name="${1:-}"
@@ -128,15 +131,17 @@ cloud_local_preflight() {
 }
 
 cloud_local_write_runtime_env() {
-  if [ -L "$CLOUD_LOCAL_STATE_DIR" ] || [ -L "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" ]; then
+  if [ -L "$CLOUD_LOCAL_STATE_DIR" ] ||
+     [ -L "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" ] ||
+     [ -L "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR" ]; then
     error "cloud-local runtime directory must not be a symbolic link"
     return 1
   fi
 
   if ! (
     umask 077
-    mkdir -p "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR"
-    chmod 700 "$CLOUD_LOCAL_STATE_DIR" "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR"
+    mkdir -p "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR"
+    chmod 700 "$CLOUD_LOCAL_STATE_DIR" "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR"
   ); then
     error "could not create private cloud-local runtime directories"
     return 1
@@ -212,4 +217,210 @@ PY
     error "could not set private permissions on the NovApi runtime environment"
     return 1
   fi
+}
+
+_cloud_local_is_running() (
+  STATE_DIR="$CLOUD_LOCAL_STATE_DIR"
+  is_running "$1"
+)
+
+_cloud_local_start_background() (
+  STATE_DIR="$CLOUD_LOCAL_STATE_DIR"
+  start_background "$@"
+)
+
+_cloud_local_stop_background() (
+  STATE_DIR="$CLOUD_LOCAL_STATE_DIR"
+  stop_background "$@"
+)
+
+_cloud_local_wait_for_port() (
+  STATE_DIR="$CLOUD_LOCAL_STATE_DIR"
+  wait_for_port "$@"
+)
+
+_cloud_local_report_service() {
+  local label="$1" process="$2" port="$3"
+  if _cloud_local_is_running "$process"; then
+    if listening_on_address "127.0.0.1" "$port"; then
+      log "$label running (managed, port $port)"
+      return 0
+    fi
+    warn "$label process is running but port $port is not listening"
+    return 1
+  fi
+  if listening_on_address "127.0.0.1" "$port"; then
+    warn "port $port is occupied by a process not managed by cloud-local"
+    return 1
+  fi
+  log "$label not running"
+}
+
+cloud_local_status() {
+  local env_name="${1:-}"
+  if [ "$env_name" != "dev" ]; then
+    error "cloud-local supports only --env dev"
+    return 2
+  fi
+
+  local failed=0
+  _cloud_local_report_service "NovApi" "$CLOUD_LOCAL_API_PROCESS" "$CLOUD_LOCAL_DB_PORT" || failed=1
+  _cloud_local_report_service "NovApp" "$CLOUD_LOCAL_APP_PROCESS" "$CLOUD_LOCAL_APP_PORT" || failed=1
+  return "$failed"
+}
+
+_cloud_local_wait_for_api() {
+  local tries=0 response
+  while [ "$tries" -lt 20 ]; do
+    if ! _cloud_local_is_running "$CLOUD_LOCAL_API_PROCESS"; then
+      error "NovApi exited during startup; see $CLOUD_LOCAL_STATE_DIR/$CLOUD_LOCAL_API_PROCESS.log"
+      return 1
+    fi
+    if response="$(curl -fsS --max-time 3 "http://127.0.0.1:${CLOUD_LOCAL_DB_PORT}/api/v1/auth/ping" 2>/dev/null)" &&
+       [ "$response" = '{"status":"/pong"}' ]; then
+      log "NovApi ready"
+      return 0
+    fi
+    tries=$((tries + 1))
+    sleep 1
+  done
+  error "NovApi did not return its ready response; see $CLOUD_LOCAL_STATE_DIR/$CLOUD_LOCAL_API_PROCESS.log"
+  return 1
+}
+
+_cloud_local_wait_for_pid_exit() {
+  local pid="$1" label="$2" tries=0 process_state
+  while [ "$tries" -lt 20 ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    process_state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    case "$process_state" in
+      Z*) return 0 ;;
+    esac
+    tries=$((tries + 1))
+    sleep 1
+  done
+  error "timed out waiting for $label to stop"
+  return 1
+}
+
+_cloud_local_stop_one() {
+  local process="$1" label="$2" port="$3" pidfile="$CLOUD_LOCAL_STATE_DIR/$1.pid"
+  if _cloud_local_is_running "$process"; then
+    local pid
+    pid="$(cat "$pidfile")"
+    _cloud_local_stop_background "$process" || return 1
+    _cloud_local_wait_for_pid_exit "$pid" "$label" || return 1
+  else
+    _cloud_local_stop_background "$process" || return 1
+  fi
+  if listening_on_address "127.0.0.1" "$port"; then
+    error "$label stopped but port $port remains occupied; leaving runtime configuration in place"
+    return 1
+  fi
+}
+
+_cloud_local_remove_runtime() {
+  rm -f -- "$CLOUD_LOCAL_NOVAPI_ENV_FILE" "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR/db_init.sql"
+  rmdir -- "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR" 2>/dev/null || true
+}
+
+_cloud_local_rollback_start() {
+  local app_started="$1" api_started="$2"
+  local failed=0
+  if [ "$app_started" -eq 1 ]; then
+    _cloud_local_stop_one "$CLOUD_LOCAL_APP_PROCESS" "NovApp" "$CLOUD_LOCAL_APP_PORT" || failed=1
+  fi
+  if [ "$api_started" -eq 1 ]; then
+    if _cloud_local_stop_one "$CLOUD_LOCAL_API_PROCESS" "NovApi" "$CLOUD_LOCAL_DB_PORT"; then
+      _cloud_local_remove_runtime
+    else
+      failed=1
+    fi
+  fi
+  return "$failed"
+}
+
+cloud_local_start() {
+  local env_name="${1:-}"
+  if [ "$env_name" != "dev" ]; then
+    error "cloud-local supports only --env dev"
+    return 2
+  fi
+
+  if _cloud_local_is_running "$CLOUD_LOCAL_API_PROCESS" &&
+     listening_on_address "127.0.0.1" "$CLOUD_LOCAL_DB_PORT" &&
+     _cloud_local_is_running "$CLOUD_LOCAL_APP_PROCESS" &&
+     listening_on_address "127.0.0.1" "$CLOUD_LOCAL_APP_PORT"; then
+    log "cloud-local services already running"
+    return 0
+  fi
+
+  if ! _cloud_local_is_running "$CLOUD_LOCAL_API_PROCESS" &&
+     listening_on_address "127.0.0.1" "$CLOUD_LOCAL_DB_PORT"; then
+    error "port $CLOUD_LOCAL_DB_PORT is occupied by a process not managed by cloud-local"
+    return 1
+  fi
+  if ! _cloud_local_is_running "$CLOUD_LOCAL_APP_PROCESS" &&
+     listening_on_address "127.0.0.1" "$CLOUD_LOCAL_APP_PORT"; then
+    error "port $CLOUD_LOCAL_APP_PORT is occupied by a process not managed by cloud-local"
+    return 1
+  fi
+
+  cloud_local_preflight "$env_name" || return $?
+
+  local api_started=0 app_started=0
+  if ! _cloud_local_is_running "$CLOUD_LOCAL_API_PROCESS"; then
+    _cloud_local_start_background "$CLOUD_LOCAL_API_PROCESS" env -i \
+      "PATH=$PATH" "HOME=$HOME" "TMPDIR=${TMPDIR:-/tmp}" \
+      NODE_ENV=development IS_NOVAI=true PORT="$CLOUD_LOCAL_DB_PORT" \
+      AWS_PROFILE=novai-dev AWS_DEFAULT_REGION=us-west-2 \
+      bash -c 'cd "$1" && exec node "$2"' _ \
+      "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" "$NOVAPI_REPO/bin/www"
+    api_started=1
+  fi
+  if ! _cloud_local_wait_for_port "$CLOUD_LOCAL_API_PROCESS" "$CLOUD_LOCAL_DB_PORT" ||
+     ! _cloud_local_wait_for_api; then
+    _cloud_local_rollback_start "$app_started" "$api_started" || true
+    return 1
+  fi
+
+  if ! _cloud_local_is_running "$CLOUD_LOCAL_APP_PROCESS"; then
+    _cloud_local_start_background "$CLOUD_LOCAL_APP_PROCESS" env -i \
+      "PATH=$PATH" "HOME=$HOME" "TMPDIR=${TMPDIR:-/tmp}" \
+      VITE_SERVER_URL=http://localhost:3000 VITE_IS_NOVAI=true \
+      VITE_PRODUCTION=false VITE_PORT="$CLOUD_LOCAL_APP_PORT" \
+      bash -c 'cd "$1" && exec npm run dev -- --port "$2" --strictPort --envDir "$3"' _ \
+      "$NOVAPP_REPO" "$CLOUD_LOCAL_APP_PORT" "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR"
+    app_started=1
+  fi
+  if ! _cloud_local_wait_for_port "$CLOUD_LOCAL_APP_PROCESS" "$CLOUD_LOCAL_APP_PORT" ||
+     ! _cloud_local_is_running "$CLOUD_LOCAL_APP_PROCESS"; then
+    error "NovApp exited during startup; see $CLOUD_LOCAL_STATE_DIR/$CLOUD_LOCAL_APP_PROCESS.log"
+    _cloud_local_rollback_start "$app_started" "$api_started" || true
+    return 1
+  fi
+
+  log "cloud-local ready: NovApp http://localhost:$CLOUD_LOCAL_APP_PORT -> NovApi http://localhost:$CLOUD_LOCAL_DB_PORT"
+}
+
+cloud_local_stop() {
+  local env_name="${1:-}"
+  if [ "$env_name" != "dev" ]; then
+    error "cloud-local supports only --env dev"
+    return 2
+  fi
+
+  local failed=0
+  _cloud_local_stop_one "$CLOUD_LOCAL_APP_PROCESS" "NovApp" "$CLOUD_LOCAL_APP_PORT" || failed=1
+  if _cloud_local_stop_one "$CLOUD_LOCAL_API_PROCESS" "NovApi" "$CLOUD_LOCAL_DB_PORT"; then
+    _cloud_local_remove_runtime
+  else
+    failed=1
+  fi
+  if [ "$failed" -ne 0 ]; then
+    return 1
+  fi
+  log "cloud-local stopped; dev tunnels remain open"
 }
