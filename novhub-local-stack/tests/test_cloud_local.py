@@ -29,8 +29,8 @@ class CloudLocalTests(unittest.TestCase):
             root = Path(temp_dir)
             novhub = root / "novhub"
             novapi = root / "NovApi"
-            (novapi / "db").mkdir(parents=True)
-            db_init = novapi / "db" / "db_init.sql"
+            novapi.mkdir()
+            db_init = novapi / "db_init.sql"
             db_init.write_text("SELECT 1;\n", encoding="utf-8")
             env = {
                 "NOVHUB_ROOT": str(novhub),
@@ -41,6 +41,8 @@ class CloudLocalTests(unittest.TestCase):
                 "CLOUD_LOCAL_DB_LOCAL_PORT": "25432",
                 "CLOUD_LOCAL_ES_HOST": "dev.example.invalid",
                 "CLOUD_LOCAL_ES_INDEX": "weld-data-stream",
+                "CLOUD_LOCAL_S3_BUCKET_NAME": "test-robot-data-bucket",
+                "CLOUD_LOCAL_JWT_SECRET": "test-jwt-secret",
             }
             result = self.run_shell(
                 'source "$CLOUD_LOCAL_STEP_FILE"\ncloud_local_write_runtime_env',
@@ -52,15 +54,17 @@ class CloudLocalTests(unittest.TestCase):
             runtime_env = runtime_dir / ".env"
             self.assertEqual(stat.S_IMODE(runtime_env.stat().st_mode), 0o600)
             self.assertEqual((runtime_dir / "db_init.sql").resolve(), db_init)
-            novapp_runtime_dir = novhub / ".state" / "cloud-local" / "novapp-runtime"
-            self.assertEqual(stat.S_IMODE(novapp_runtime_dir.stat().st_mode), 0o700)
             content = runtime_env.read_text(encoding="utf-8")
             self.assertIn("DB_PASSWORD='test password#value'\n", content)
             self.assertIn("DB_HOST=127.0.0.1\n", content)
             self.assertIn("DB_PORT=25432\n", content)
             self.assertIn("OPENSEARCH_HOST=https://dev.example.invalid\n", content)
+            self.assertIn("S3_BUCKET_NAME=test-robot-data-bucket\n", content)
+            self.assertIn("JWT_SECRET=test-jwt-secret\n", content)
+            self.assertIn("JWT_USER_TOKEN_EXPIRATION=1d\n", content)
             self.assertNotIn("AWS_ACCESS_KEY_ID", content)
             self.assertNotIn("AWS_SECRET_ACCESS_KEY", content)
+            self.assertNotIn("test-jwt-secret", result.stdout + result.stderr)
 
     def test_start_requires_preflight_before_starting_either_service(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -130,6 +134,7 @@ cloud_local_start dev
             self.assertLess(content.index("start:cloud-local-novapi"), content.index("start:cloud-local-novapp"))
             self.assertIn("AWS_PROFILE=novai-dev", content)
             self.assertIn("VITE_SERVER_URL=http://localhost:3000", content)
+            self.assertNotIn("--envDir", content)
 
 
 if __name__ == "__main__":

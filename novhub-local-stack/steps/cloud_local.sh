@@ -2,7 +2,6 @@ NOVAPI_REPO="${NOVAPI_REPO:-$HOME/dev/NovApi}"
 NOVAPP_REPO="${NOVAPP_REPO:-$HOME/dev/novhub}"
 CLOUD_LOCAL_STATE_DIR="$NOVHUB_ROOT/.state/cloud-local"
 CLOUD_LOCAL_NOVAPI_RUNTIME_DIR="$CLOUD_LOCAL_STATE_DIR/novapi-runtime"
-CLOUD_LOCAL_NOVAPP_RUNTIME_DIR="$CLOUD_LOCAL_STATE_DIR/novapp-runtime"
 CLOUD_LOCAL_NOVAPI_ENV_FILE="$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR/.env"
 CLOUD_LOCAL_DB_PORT=3000
 CLOUD_LOCAL_APP_PORT=5173
@@ -27,7 +26,7 @@ cloud_local_preflight() {
 
   if [ ! -f "$NOVAPI_REPO/package.json" ] ||
      [ ! -f "$NOVAPI_REPO/bin/www" ] ||
-     [ ! -f "$NOVAPI_REPO/db/db_init.sql" ]; then
+     [ ! -f "$NOVAPI_REPO/db_init.sql" ]; then
     error "NovApi checkout is missing required runtime files: $NOVAPI_REPO"
     return 1
   fi
@@ -67,6 +66,18 @@ cloud_local_preflight() {
   cloud_region="$(cloud_env_get DEV_AWS_REGION)"
   if [ "$cloud_profile" != "novai-dev" ] || [ "$cloud_region" != "us-west-2" ]; then
     error "cloud-env.env must configure dev with AWS profile novai-dev and region us-west-2"
+    return 1
+  fi
+  local s3_bucket_name
+  s3_bucket_name="$(cloud_env_get DEV_S3_BUCKET_NAME)"
+  if [ -z "$s3_bucket_name" ]; then
+    error "cloud-env.env must configure DEV_S3_BUCKET_NAME for NovApi's robot data bucket"
+    return 1
+  fi
+  local jwt_secret
+  jwt_secret="$(cloud_env_get JWT_SECRET)"
+  if [ -z "$jwt_secret" ]; then
+    error "cloud-env.env must configure JWT_SECRET for NovApi"
     return 1
   fi
   require_aws_credentials_file_0600
@@ -116,32 +127,36 @@ cloud_local_preflight() {
   CLOUD_LOCAL_DB_LOCAL_PORT="$db_local_port"
   CLOUD_LOCAL_ES_HOST="$es_host"
   CLOUD_LOCAL_ES_INDEX="$es_index"
+  CLOUD_LOCAL_S3_BUCKET_NAME="$s3_bucket_name"
+  CLOUD_LOCAL_JWT_SECRET="$jwt_secret"
   export CLOUD_LOCAL_DB_NAME CLOUD_LOCAL_DB_USERNAME CLOUD_LOCAL_DB_PASSWORD
   export CLOUD_LOCAL_DB_LOCAL_PORT CLOUD_LOCAL_ES_HOST CLOUD_LOCAL_ES_INDEX
+  export CLOUD_LOCAL_S3_BUCKET_NAME CLOUD_LOCAL_JWT_SECRET
 
   cloud_local_write_runtime_env || {
     unset CLOUD_LOCAL_DB_NAME CLOUD_LOCAL_DB_USERNAME CLOUD_LOCAL_DB_PASSWORD
     unset CLOUD_LOCAL_DB_LOCAL_PORT CLOUD_LOCAL_ES_HOST CLOUD_LOCAL_ES_INDEX
+    unset CLOUD_LOCAL_S3_BUCKET_NAME CLOUD_LOCAL_JWT_SECRET
     return 1
   }
   unset CLOUD_LOCAL_DB_NAME CLOUD_LOCAL_DB_USERNAME CLOUD_LOCAL_DB_PASSWORD
   unset CLOUD_LOCAL_DB_LOCAL_PORT CLOUD_LOCAL_ES_HOST CLOUD_LOCAL_ES_INDEX
+  unset CLOUD_LOCAL_S3_BUCKET_NAME CLOUD_LOCAL_JWT_SECRET
 
   log "dev preflight passed; NovApi runtime configuration is private"
 }
 
 cloud_local_write_runtime_env() {
   if [ -L "$CLOUD_LOCAL_STATE_DIR" ] ||
-     [ -L "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" ] ||
-     [ -L "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR" ]; then
+     [ -L "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" ]; then
     error "cloud-local runtime directory must not be a symbolic link"
     return 1
   fi
 
   if ! (
     umask 077
-    mkdir -p "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR"
-    chmod 700 "$CLOUD_LOCAL_STATE_DIR" "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR"
+    mkdir -p "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR"
+    chmod 700 "$CLOUD_LOCAL_STATE_DIR" "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR"
   ); then
     error "could not create private cloud-local runtime directories"
     return 1
@@ -150,12 +165,12 @@ cloud_local_write_runtime_env() {
   local db_init_link="$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR/db_init.sql"
   if [ -e "$db_init_link" ] || [ -L "$db_init_link" ]; then
     if [ ! -L "$db_init_link" ] ||
-       [ "$(readlink -f "$db_init_link")" != "$(readlink -f "$NOVAPI_REPO/db/db_init.sql")" ]; then
+       [ "$(readlink -f "$db_init_link")" != "$(readlink -f "$NOVAPI_REPO/db_init.sql")" ]; then
       error "unexpected file already exists at the private NovApi db_init.sql runtime link"
       return 1
     fi
   else
-    ln -s "$NOVAPI_REPO/db/db_init.sql" "$db_init_link"
+    ln -s "$NOVAPI_REPO/db_init.sql" "$db_init_link"
   fi
 
   if ! CLOUD_LOCAL_ENV_FILE="$CLOUD_LOCAL_NOVAPI_ENV_FILE" python3 - <<'PY'
@@ -190,6 +205,9 @@ values = {
     "DB_PASSWORD": os.environ["CLOUD_LOCAL_DB_PASSWORD"],
     "OPENSEARCH_HOST": f"https://{os.environ['CLOUD_LOCAL_ES_HOST']}",
     "OPENSEARCH_INDEX": os.environ["CLOUD_LOCAL_ES_INDEX"],
+    "S3_BUCKET_NAME": os.environ["CLOUD_LOCAL_S3_BUCKET_NAME"],
+    "JWT_SECRET": os.environ["CLOUD_LOCAL_JWT_SECRET"],
+    "JWT_USER_TOKEN_EXPIRATION": "1d",
 }
 
 path = os.environ["CLOUD_LOCAL_ENV_FILE"]
@@ -198,7 +216,7 @@ try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as runtime_env:
         for key, value in values.items():
-            if not re.fullmatch(r"[A-Z_]+", key):
+            if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
                 raise ValueError("invalid environment variable name")
             runtime_env.write(f"{key}={quote_dotenv(value, key)}\n")
     os.replace(temporary_path, path)
@@ -323,7 +341,7 @@ _cloud_local_stop_one() {
 
 _cloud_local_remove_runtime() {
   rm -f -- "$CLOUD_LOCAL_NOVAPI_ENV_FILE" "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR/db_init.sql"
-  rmdir -- "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR" 2>/dev/null || true
+  rmdir -- "$CLOUD_LOCAL_NOVAPI_RUNTIME_DIR" 2>/dev/null || true
 }
 
 _cloud_local_rollback_start() {
@@ -391,8 +409,8 @@ cloud_local_start() {
       "PATH=$PATH" "HOME=$HOME" "TMPDIR=${TMPDIR:-/tmp}" \
       VITE_SERVER_URL=http://localhost:3000 VITE_IS_NOVAI=true \
       VITE_PRODUCTION=false VITE_PORT="$CLOUD_LOCAL_APP_PORT" \
-      bash -c 'cd "$1" && exec npm run dev -- --port "$2" --strictPort --envDir "$3"' _ \
-      "$NOVAPP_REPO" "$CLOUD_LOCAL_APP_PORT" "$CLOUD_LOCAL_NOVAPP_RUNTIME_DIR"
+      bash -c 'cd "$1" && exec npm run dev -- --port "$2" --strictPort' _ \
+      "$NOVAPP_REPO" "$CLOUD_LOCAL_APP_PORT"
     app_started=1
   fi
   if ! _cloud_local_wait_for_port "$CLOUD_LOCAL_APP_PROCESS" "$CLOUD_LOCAL_APP_PORT" ||
