@@ -3,92 +3,32 @@ set -euo pipefail
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
   cat <<USAGE
-Usage: cloud-ingest.sh --env dev [--probe | --runs N] [--dry-run] --template <path>
-       cloud-ingest.sh --env dev --remove [--confirm-delete]
+Usage: cloud-ingest.sh --env dev [--robot-id ID] [--probe | --runs N] [--dry-run] --template <path>
+       cloud-ingest.sh --env dev [--robot-id ID] --remove [--count N] [--confirm-delete]
 
-HUB-106: wraps opensearch-ingester's perfload tool to add synthetic runs to
-dev's robot (DEV_INGEST_ROBOT_ID in cloud-env.env), through cloud-tunnel.sh,
-so robot reaches about 2,260 total weld_run entries (test's NovAI-1555 has
-2,259). Host/index/DB values are read from the secrets files and reach the
-ingester process only through its own environment - never printed, never a
-command-line argument, never typed by you. ES_HOST never carries a port -
-cloud-tunnel.sh's OpenSearch forward is pinned to the real port (443) on
-this env's own loopback address specifically so the signed Host header
-matches what AWS recomputes server-side (a tunnel on a high port was the
-real cause of a prior 403 "signature we calculated does not match").
+HUB-106: adds synthetic weld_run data to a dev robot via opensearch-ingester's
+perfload, through cloud-tunnel.sh. Full walkthrough, safety model, and worked
+examples: presentations/novhub-local-stack/HUB-106-DEV-INGEST-AND-PERFORMANCE-RUNBOOK.md
 
-The owner's own decision: probe with exactly one real run first, verify,
-then do the rest - start with --probe, not a full run.
+Refuses up front unless: both tunnel forwards are open, the dev /etc/hosts
+mapping exists, the AWS SSO session is live, the target robot exists in
+NovApi, and a pre/post audit of OpenSearch + Postgres passes - no flag
+bypasses the audit.
 
-Refuses up front, before anything runs, unless:
-  - both forwards for this env are open (cloud-tunnel.sh open --env <env>)
-  - the /etc/hosts line for this env is present (cloud-hosts.sh add --env <env>)
-  - the AWS profile's SSO session is live right now (a real STS call)
-  - DEV_INGEST_ROBOT_ID is set in cloud-env.env
-  - robot's current total is read fresh each run (the "daemon-free path" -
-    perf-rank-robots.sh --target <env> --robot-id <id>), never assumed
-  - OpenSearch's mapping and the synthetic run IDs in OpenSearch and
-    Postgres are audited before and after each add. A complete requested
-    batch is a verified no-op; an empty synthetic state may be ingested;
-    partial or conflicting state stops before writing. There is no
-    override that can bypass this check.
+  --robot-id ID     target robot (default: DEV_INGEST_ROBOT_ID in
+                    cloud-env.env); must exist in NovApi
+  --probe           ingest exactly 1 run, with verification output
+  --runs N          ingest exactly N runs, never capped (no --probe/--runs:
+                    ingest up to DEFAULT_TARGET_TOTAL in cloud-ingest.py)
+  --dry-run         print the plan, write nothing
+  --template PATH   a real Hermit V2 sample file; required for a real ingest
+  --remove [--count N] [--confirm-delete]
+                    delete synthetic data, scoped to this tool's own
+                    job_id/run_id range - all of it, or just the N most
+                    recently added runs. Dry by default; --confirm-delete
+                    requires typing the robot id back.
 
-  --probe           ingest exactly ONE real run (OpenSearch docs + the
-                    Postgres association), then print: the OpenSearch raw
-                    document count for this robot before/after, the
-                    Postgres association count, and what perf-rank-robots
-                    shows - so you can confirm it actually worked before
-                    committing to the rest. If this passes and more are
-                    needed, prints the --remove command to clear the
-                    probe's data and the --runs N command for the full
-                    remaining amount - never a bare "continue" command,
-                    since this run's data still exists and a follow-up
-                    would duplicate it.
-  --runs N          ingest exactly N real runs instead of "whatever's left
-                    to reach ~2,260" - must be a positive integer, capped
-                    (with a note) at however many are left. Same
-                    verification output as --probe, generalized to N.
-                    Mutually exclusive with --probe (which is --runs 1).
-                    Run-id base is always the same fixed value, and every
-                    invocation's run index restarts at 1 against it - a
-                    larger request after a smaller completed batch is
-                    therefore a partial-state conflict. Remove the existing
-                    batch before ingesting a different size.
-  --dry-run         print the full plan and stop - nothing written, no
-                    values in the printed plan.
-  --template PATH   a real Hermit V2 sample file - same shape
-                    perf-ingester-load.sh already uses locally, NOT a test
-                    fixture. Required for any real (non---dry-run) ingest.
-
-The ingester's own combined output is scrubbed (never an ARN, never an
-echoed x-amz-security-token/Authorization/AWSAccessKey value - confirmed
-for real that a signature-mismatch 403 can echo the token back) and
-logged to a 0600 file under .state/cloud-ingest-logs/, whose path is
-printed - read that for the first real errors instead of the terminal
-scrollback.
-
-If a matching weld_monitoring_presets row doesn't exist for the robot (the
-Postgres association the ingester creates needs one to match), this stops
-and prints the exact SQL as text instead - it never runs that INSERT
-itself; the owner decides.
-
-  --remove [--confirm-delete]
-                    prints what would be deleted (OpenSearch delete_by_query
-                    + a Postgres DELETE), scoped ONLY to this tool's own
-                    synthetic job_id / run_id >= the run-id base - never
-                    robot_id alone, since the robot also has real data.
-                    A confirmed removal audits both stores first, attempts
-                    both scoped deletions, and audits again; retries can
-                    finish a partial delete. Exit is successful only when
-                    both stores are verified clear.
-                    The OpenSearch delete matches on job_id, not on run_id
-                    or document _id, so it covers every synthetic document
-                    regardless of how many duplicate invocations wrote
-                    them (confirmed: the same job_id is written on every
-                    document this tool ever creates for the robot, even
-                    though each invocation's document _id differs). Dry
-                    by default; --confirm-delete additionally requires
-                    typing the robot id back before anything is deleted.
+Combined ingester output is scrubbed and logged under .state/cloud-ingest-logs/.
 USAGE
   exit 0
 fi
@@ -97,16 +37,23 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 ENV_NAME=""
+ROBOT_ID_OVERRIDE=""
 PY_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --env) ENV_NAME="$2"; shift 2 ;;
+    --robot-id) ROBOT_ID_OVERRIDE="$2"; shift 2 ;;
     --dry-run|--remove|--confirm-delete|--probe) PY_ARGS+=("$1"); shift ;;
-    --runs) PY_ARGS+=("--runs" "$2"); shift 2 ;;
+    --runs|--count) PY_ARGS+=("$1" "$2"); shift 2 ;;
     --template) PY_ARGS+=("--template" "$2"); shift 2 ;;
     *) error "Unknown argument: $1"; exit 1 ;;
   esac
 done
+
+if [ -n "$ROBOT_ID_OVERRIDE" ] && ! [[ "$ROBOT_ID_OVERRIDE" =~ ^[0-9]+$ ]]; then
+  error "--robot-id must be a positive integer"
+  exit 1
+fi
 
 if [ "$ENV_NAME" != "dev" ]; then
   error "--env dev only - test is QA's and off limits for this tool"
@@ -116,11 +63,14 @@ fi
 ensure_cloud_env_config
 AWS_REGION_CFG="$(cloud_env_get DEV_AWS_REGION)"
 AWS_PROFILE_CFG="$(cloud_env_get DEV_AWS_PROFILE)"
-INGEST_ROBOT_ID_CFG="$(cloud_env_get DEV_INGEST_ROBOT_ID)"
+INGEST_ROBOT_ID_CFG="${ROBOT_ID_OVERRIDE:-$(cloud_env_get DEV_INGEST_ROBOT_ID)}"
 [ -n "$AWS_REGION_CFG" ] || { error "no AWS region configured for 'dev' in $CLOUD_ENV_CONFIG_FILE"; exit 1; }
 [ -n "$AWS_PROFILE_CFG" ] || { error "no AWS profile configured for 'dev' in $CLOUD_ENV_CONFIG_FILE"; exit 1; }
 [ -n "$INGEST_ROBOT_ID_CFG" ] || { error "no DEV_INGEST_ROBOT_ID configured in $CLOUD_ENV_CONFIG_FILE"; exit 1; }
 require_aws_credentials_file_0600
+
+ROBOT_EXISTS="$("$SCRIPT_DIR/perf-rank-robots.sh" --target "$ENV_NAME" --robot-exists "$INGEST_ROBOT_ID_CFG")"
+[ "$ROBOT_EXISTS" = "yes" ] || { error "robot $INGEST_ROBOT_ID_CFG does not exist in NovApi for '$ENV_NAME'"; exit 1; }
 
 is_running "cloud-tunnel-${ENV_NAME}-db" || { error "DB forward for '$ENV_NAME' is not open - run: ./cloud-tunnel.sh open --env $ENV_NAME"; exit 1; }
 is_running "cloud-tunnel-${ENV_NAME}-es" || { error "OpenSearch forward for '$ENV_NAME' is not open - run: ./cloud-tunnel.sh open --env $ENV_NAME"; exit 1; }
@@ -161,7 +111,6 @@ export CLOUD_INGEST_AWS_REGION="$AWS_REGION_CFG"
 export CLOUD_INGEST_AWS_PROFILE="$AWS_PROFILE_CFG"
 export CLOUD_INGEST_ROBOT_ID="$INGEST_ROBOT_ID_CFG"
 export CLOUD_INGEST_INGESTER_REPO="$INGESTER_REPO"
-export CLOUD_INGEST_RANK_SCRIPT="$SCRIPT_DIR/perf-rank-robots.sh"
 export CLOUD_INGEST_LOG_DIR="$STATE_DIR/cloud-ingest-logs"
 
 exec "$VENV_DIR/bin/python" "$NOVHUB_ROOT/cloud-ingest.py" "${PY_ARGS[@]}"

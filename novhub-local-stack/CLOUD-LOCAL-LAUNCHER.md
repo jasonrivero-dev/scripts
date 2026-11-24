@@ -288,8 +288,9 @@ Replace `<capture-directory>` with the directory created in Step 25.
 
 **Expected:** `date_range_used.applied` is `true`, the dates match
 `perf-targets.dev.env`, both usable metrics are present, there are no per-run
-`weld_test_reports` requests, and there are about five
-`weld_test_reports_batch` requests for 2,260 runs.
+`weld_test_reports` requests, and the number of `weld_test_reports_batch`
+requests is consistent with the robot's current total run count (about one
+batch request per ~500 runs).
 
 Accept the capture only if all of those checks pass.
 

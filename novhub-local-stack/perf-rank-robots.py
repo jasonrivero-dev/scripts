@@ -52,11 +52,18 @@ def main():
     ap.add_argument("--robot-id", type=int, help="look up just this one robot's total "
                      "(machine-readable: prints a bare integer, or 10000+, to stdout - "
                      "nothing else) instead of ranking every robot")
+    ap.add_argument("--robot-exists", type=int, help="print yes/no for whether this robot id "
+                     "is in NovApi's robot list, instead of ranking or totaling")
     args = ap.parse_args()
 
     print(f"[INFO] date range: {START_DATE} to {END_DATE} (fixed, printed - same every run)", file=sys.stderr)
     token = login()
     headers = {"Authorization": f"bearer {token}"}
+
+    if args.robot_exists is not None:
+        robots = list_robots(headers)
+        print("yes" if any(r.get("id") == args.robot_exists for r in robots) else "no")
+        return
 
     if args.robot_id is not None:
         total = weld_run_total(headers, args.robot_id)
