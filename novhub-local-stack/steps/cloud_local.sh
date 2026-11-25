@@ -423,6 +423,16 @@ cloud_local_start() {
   log "cloud-local ready: NovApp http://localhost:$CLOUD_LOCAL_APP_PORT -> NovApi http://localhost:$CLOUD_LOCAL_DB_PORT"
 }
 
+cloud_local_restart() {
+  local env_name="${1:-}"
+  if [ "$env_name" != "dev" ]; then
+    error "cloud-local supports only --env dev"
+    return 2
+  fi
+  cloud_local_stop "$env_name" || return 1
+  cloud_local_start "$env_name"
+}
+
 cloud_local_stop() {
   local env_name="${1:-}"
   if [ "$env_name" != "dev" ]; then

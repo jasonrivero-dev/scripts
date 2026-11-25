@@ -307,6 +307,24 @@ Run:
 **Expected:** The cloud-local NovApi and NovApp processes stop. The tunnels
 remain open; close them separately when you are finished, if desired.
 
+### Restarting instead of stopping for good
+
+Use `restart` in place of a separate stop and start when you need to reset
+local NovApi/NovApp state (for example, between a BEFORE and an AFTER capture)
+without re-running Steps 1-7. The dev tunnels and host mapping must still be
+in place; `restart` runs the same dev-access and port checks as Step 8, and the
+same stop checks as Step 27, with no partial state left if either half fails.
+
+Run:
+
+```bash
+./cloud-local.sh restart --env dev
+```
+
+**Expected:** The same stop confirmation as Step 27, followed by the same
+`NovApi ready` and `cloud-local ready` output as Step 8. Both NovApi and NovApp
+go down briefly; there is no NovApi-only restart.
+
 ## Comparing results
 
 Local NovApi-to-cloud timings and deployed-dev timings use different network
