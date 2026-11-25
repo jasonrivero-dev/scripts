@@ -3,7 +3,7 @@
 Brings up the full local NovHub stack for manual validation — the weld-data path (PLCSIM →
 NovData → an OpenSearch loader → NOVAPI → NovApp) and the control path (LUNA → `plc-node` →
 PLCSIM) — in the order the stack actually needs, idempotently. Replaces hand-walking
-`~/dev/presentations/novhub-local-stack/NOVHUB_LOCAL_RUNBOOK.md` step by step.
+`docs/NOVHUB_LOCAL_RUNBOOK.md` step by step.
 
 Not a standalone application: it orchestrates seven other checkouts
 (`~/dev/NovApi`, `~/dev/NovData`, `~/dev/NovSync`, `~/dev/novhub`, `~/dev/plc_simulator`,
@@ -297,7 +297,7 @@ reachability check run from the bastion itself, for confirming it can even reach
 environment's hosts before trying to tunnel to them.
 
 The full before/after procedure (frozen-dataset check, folder layout, when to use which tool) is
-documented once, in `~/dev/presentations/novhub-local-stack/hub106-perf-results/README.md` — this
+documented once, in `docs/hub106-perf-results/README.md` — this
 section is the tool reference, that doc is the procedure.
 
 ## Appendix: OpenSearch manual operations

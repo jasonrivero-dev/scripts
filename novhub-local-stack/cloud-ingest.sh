@@ -8,7 +8,7 @@ Usage: cloud-ingest.sh --env dev [--robot-id ID] [--probe | --runs N] [--dry-run
 
 HUB-106: adds synthetic weld_run data to a dev robot via opensearch-ingester's
 perfload, through cloud-tunnel.sh. Full walkthrough, safety model, and worked
-examples: presentations/novhub-local-stack/HUB-106-DEV-INGEST-AND-PERFORMANCE-RUNBOOK.md
+examples: docs/HUB-106-DEV-INGEST-AND-PERFORMANCE-RUNBOOK.md
 
 Refuses up front unless: both tunnel forwards are open, the dev /etc/hosts
 mapping exists, the AWS SSO session is live, the target robot exists in
