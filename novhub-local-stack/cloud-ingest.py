@@ -283,27 +283,43 @@ def opensearch_run_summary_coarse(es_host, index, run_id_field, job_id_field):
                 "run_id_cardinality": {
                     "cardinality": {"field": run_id_field, "precision_threshold": 40000}
                 },
-                "run_id_min": {"min": {"field": run_id_field}},
-                "run_id_max": {"max": {"field": run_id_field}},
+                "run_id_min": {"min": {"script": {
+                    "lang": "painless",
+                    "source": "Long.parseLong(doc[params.field].value.toString())",
+                    "params": {"field": run_id_field},
+                }}},
+                "run_id_max": {"max": {"script": {
+                    "lang": "painless",
+                    "source": "Long.parseLong(doc[params.field].value.toString())",
+                    "params": {"field": run_id_field},
+                }}},
                 "missing_run_id": {"missing": {"field": run_id_field}},
             },
         },
     )
     aggregations = _validated_aggregations(response)
-    cardinality = aggregations.get("run_id_cardinality", {}).get("value")
-    run_min = aggregations.get("run_id_min", {}).get("value")
-    run_max = aggregations.get("run_id_max", {}).get("value")
     missing = aggregations.get("missing_run_id", {})
     missing_count = missing.get("doc_count")
-    if type(cardinality) is not int and not (isinstance(cardinality, float) and cardinality.is_integer()):
-        raise ValueError("OpenSearch synthetic-run audit returned an invalid cardinality")
     if type(missing_count) is not int or missing_count < 0:
         raise ValueError("OpenSearch synthetic-run audit returned invalid aggregation data")
+
+    def whole_number(value, label):
+        # min/max/cardinality aggregation "value" fields come back as a JSON float even for
+        # a whole number (e.g. 90000001.0) - never a plain int.
+        if type(value) is int:
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        raise ValueError(f"OpenSearch synthetic-run audit returned an invalid {label}")
+
+    cardinality = whole_number(aggregations.get("run_id_cardinality", {}).get("value"), "cardinality")
+    run_min = aggregations.get("run_id_min", {}).get("value")
+    run_max = aggregations.get("run_id_max", {}).get("value")
     total_docs = os_count(es_host, index, {"term": {job_id_field: job_id}})
     summary = {
-        "cardinality": int(cardinality),
-        "min": parse_run_id(run_min) if run_min is not None else None,
-        "max": parse_run_id(run_max) if run_max is not None else None,
+        "cardinality": cardinality,
+        "min": whole_number(run_min, "min run_id") if run_min is not None else None,
+        "max": whole_number(run_max, "max run_id") if run_max is not None else None,
         "total_docs": total_docs,
     }
     return summary, missing_count
@@ -731,7 +747,12 @@ def write_private_template(template, directory):
     return path
 
 
-def run_ingester_tee_scrubbed(cmd, cwd, env):
+RUN_START_MARKER = "Starting HermitV2 parse for RunID:"   # ingester's own log line, hermit.go -
+                                                           # fires exactly once per run, ending
+                                                           # in the run's own run_id
+
+
+def run_ingester_tee_scrubbed(cmd, cwd, env, n_runs):
     """Runs the real ingester, scrubbing every line of its combined stdout+stderr before it's
     shown or stored anywhere - confirmed for real that a signature-mismatch 403 can echo back
     x-amz-security-token (a real, usable session token), and bulk.go has at least two log
@@ -739,7 +760,10 @@ def run_ingester_tee_scrubbed(cmd, cwd, env):
     ("[CRITICAL-FAIL] Entire Bulk Request Rejected! Error: %v") and the per-document
     OnFailure callback's "[DEBUG-FAIL] --- OPENSEARCH REJECTION ---" block (prints
     res.Error.Reason and the raw err). Writes the scrubbed log to a 0600 file under
-    .state/cloud-ingest-logs/ and returns (exit_code, log_path)."""
+    .state/cloud-ingest-logs/ and returns (exit_code, log_path). A live position counter goes
+    to stderr only (never the log file or stdout), one line updated in place: position is the
+    run_id on that line minus RUN_ID_BASE, not a running tally, so it can't drift if a line is
+    ever missed or duplicated."""
     os.makedirs(LOG_DIR, exist_ok=True, mode=0o700)
     os.chmod(LOG_DIR, 0o700)
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -747,11 +771,21 @@ def run_ingester_tee_scrubbed(cmd, cwd, env):
     fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True, bufsize=1)
+    width = len(str(n_runs))
+    printed_progress = False
     with os.fdopen(fd, "w") as logf:
         for line in proc.stdout:
             clean = scrub_sensitive(line)
             sys.stdout.write(clean)
             logf.write(clean)
+            if RUN_START_MARKER in clean:
+                position = int(clean.rsplit(":", 1)[-1].strip()) - RUN_ID_BASE
+                pct = position * 100 // n_runs if n_runs else 100
+                print(f"\r[PROGRESS] {position:>{width}}/{n_runs} runs ({pct:>3}%)   ",
+                      end="", file=sys.stderr, flush=True)
+                printed_progress = True
+    if printed_progress:
+        print(file=sys.stderr)
     proc.wait()
     return proc.returncode, log_path
 
@@ -1004,7 +1038,7 @@ def do_ingest(args, es_host, index, db_kv):
               f"(cwd={INGESTER_REPO}) - credentials/DSN are set only on this subprocess's own "
               f"environment, never printed, never in argv. Combined output is scrubbed and logged "
               f"below.", file=sys.stderr)
-        returncode, log_path = run_ingester_tee_scrubbed(cmd, INGESTER_REPO, child_env)
+        returncode, log_path = run_ingester_tee_scrubbed(cmd, INGESTER_REPO, child_env, n_runs)
     print(f"\n[INFO] full (scrubbed) ingester log: {log_path}")
     if returncode != 0:
         sys.exit(f"ingester exited {returncode} - see {log_path}")

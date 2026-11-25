@@ -1,5 +1,6 @@
 import copy
 import importlib.util
+import io
 import json
 import os
 import random
@@ -100,6 +101,15 @@ class FakeResponse:
 
     def json(self):
         return self.payload
+
+
+class FakeProc:
+    def __init__(self, lines, returncode=0):
+        self.stdout = iter(lines)
+        self.returncode = returncode
+
+    def wait(self):
+        return self.returncode
 
 
 class FakeCursor:
@@ -467,6 +477,44 @@ class CloudIngestAuditTests(unittest.TestCase):
             self.assertEqual(fine.call_args.args[-1], cloud_ingest.MAX_SAFE_AGGREGATION_SIZE + 1)
             coarse.assert_not_called()
 
+    def test_coarse_summary_uses_scripted_min_max_not_native_field(self):
+        # run_id is mapped as "keyword" in the real dev index - OpenSearch's native min/max
+        # aggregations reject keyword fields outright ("not supported for aggregation [min]"),
+        # confirmed against a real run. A scripted min/max avoids that regardless of field type.
+        search_response = {
+            "timed_out": False,
+            "_shards": {"failed": 0},
+            "aggregations": {
+                # OpenSearch always returns a min/max/cardinality agg's "value" as a JSON
+                # float, even for a whole number - never a plain int. Using floats here is
+                # what caught the real bug (parse_run_id rejected them outright).
+                "run_id_cardinality": {"value": 3.0},
+                "run_id_min": {"value": float(cloud_ingest.RUN_ID_BASE + 1)},
+                "run_id_max": {"value": float(cloud_ingest.RUN_ID_BASE + 3)},
+                "missing_run_id": {"doc_count": 0},
+            },
+        }
+        with (
+            patch.object(cloud_ingest, "signed_opensearch_json",
+                         return_value=search_response) as request,
+            patch.object(cloud_ingest, "os_count", return_value=153),
+        ):
+            summary, missing = cloud_ingest.opensearch_run_summary_coarse(
+                "example", "synthetic-index", "run_id", "weld_session.job_id.keyword"
+            )
+        search_body = request.call_args.args[3]
+        for key, kind in (("run_id_min", "min"), ("run_id_max", "max")):
+            agg = search_body["aggs"][key][kind]
+            self.assertIn("script", agg)
+            self.assertNotIn("field", agg)
+        self.assertEqual(summary, {
+            "cardinality": 3,
+            "min": cloud_ingest.RUN_ID_BASE + 1,
+            "max": cloud_ingest.RUN_ID_BASE + 3,
+            "total_docs": 153,
+        })
+        self.assertEqual(missing, 0)
+
     def test_truncated_fine_audit_falls_back_to_coarse(self):
         connection = FakeConnection([])
         with (
@@ -715,6 +763,33 @@ class CloudIngestRemovalTests(unittest.TestCase):
         self.assertEqual(connection.fake_cursor.query,
                           "DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id = ANY(%s)")
         self.assertEqual(connection.fake_cursor.params, (1555, expected_ids))
+
+
+class CloudIngestProgressTests(unittest.TestCase):
+    def test_progress_position_derived_from_run_id_not_a_tally(self):
+        run_ids = [cloud_ingest.RUN_ID_BASE + 1, cloud_ingest.RUN_ID_BASE + 2,
+                   cloud_ingest.RUN_ID_BASE + 2, cloud_ingest.RUN_ID_BASE + 5]
+        lines = [f"[INFO] [1555] Starting HermitV2 parse for RunID: {run_id}\n" for run_id in run_ids]
+        with (
+            tempfile.TemporaryDirectory() as log_dir,
+            patch.object(cloud_ingest, "LOG_DIR", log_dir),
+            patch.object(cloud_ingest.subprocess, "Popen", return_value=FakeProc(lines)),
+            patch("sys.stdout", new_callable=io.StringIO),
+            patch("sys.stderr", new_callable=io.StringIO) as fake_stderr,
+        ):
+            returncode, log_path = cloud_ingest.run_ingester_tee_scrubbed(["true"], "/tmp", {}, 10)
+
+            self.assertEqual(returncode, 0)
+            progress_lines = fake_stderr.getvalue().split("\r")
+            # a duplicated run_id (2) reports the same position twice; a skipped one (3, 4)
+            # still reports the correct position (5) on the next line seen - neither drifts,
+            # since position always comes from the run_id itself, never an incremented count.
+            self.assertIn(" 1/10 runs ( 10%)", progress_lines[1])
+            self.assertIn(" 2/10 runs ( 20%)", progress_lines[2])
+            self.assertIn(" 2/10 runs ( 20%)", progress_lines[3])
+            self.assertIn(" 5/10 runs ( 50%)", progress_lines[4])
+            with open(log_path) as f:
+                self.assertEqual(f.read().count("Starting HermitV2 parse for RunID"), 4)
 
 
 if __name__ == "__main__":
