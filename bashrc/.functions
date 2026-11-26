@@ -401,27 +401,27 @@ setcursor() {
 }
 
 update_vscode() {
-    local status=0
+    local rc=0
 
     # 1. Push current directory onto the stack and move to Downloads
     if pushd ~/Downloads > /dev/null; then
-        
+
         echo "=== Downloading latest VS Code Debian package ==="
         if wget -O vscode_latest_amd64.deb "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-x64"; then
-            
+
             echo "=== Installing VS Code package ==="
             if sudo dpkg -i vscode_latest_amd64.deb; then
                 # Clean up the installer binary to save space
                 rm vscode_latest_amd64.deb
             else
                 echo "Error: Installation failed. Installer kept in ~/Downloads." >&2
-                status=1
+                rc=1
             fi
         else
             echo "Error: Download failed." >&2
-            status=1
+            rc=1
         fi
-        
+
         # 2. Pop directory stack to return to the original working directory
         popd > /dev/null
     else
@@ -429,7 +429,7 @@ update_vscode() {
         return 1
     fi
 
-    return "$status"
+    return "$rc"
 }
 
 # Function to set a random dark background color
