@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   cat <<USAGE
-Usage: perf-rank-robots.sh --target NAME [--robot-id ID]
+Usage: perf-rank-robots.sh --target NAME [--robot-id ID | --robot-exists ID]
 
 HUB-106: read-only - for picking a BEFORE/AFTER robot on a target whose
 data we don't control. Logs in with that target's own secret file, lists
@@ -32,6 +32,9 @@ token. Read-only and idempotent - safe to re-run any time.
                    info/error line this script or the venv setup prints
                    goes to stderr, always, so a caller can read stdout
                    directly without filtering anything out.
+  --robot-exists ID  print exactly "yes" or "no" for whether NovApi's own
+                   robot list includes this id - same single-token-on-
+                   stdout contract as --robot-id.
 
 Env overrides: PERF_RANK_START/PERF_RANK_END (default 2015-01-01 /
 2030-12-31 - wide and fixed, printed every run), PERF_RANK_PAUSE_MS
@@ -49,6 +52,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --target) TARGET="$2"; shift 2 ;;
     --robot-id) ROBOT_ID_ARGS=(--robot-id "$2"); shift 2 ;;
+    --robot-exists) ROBOT_ID_ARGS=(--robot-exists "$2"); shift 2 ;;
     *) error "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done

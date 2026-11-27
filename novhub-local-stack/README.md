@@ -3,7 +3,7 @@
 Brings up the full local NovHub stack for manual validation — the weld-data path (PLCSIM →
 NovData → an OpenSearch loader → NOVAPI → NovApp) and the control path (LUNA → `plc-node` →
 PLCSIM) — in the order the stack actually needs, idempotently. Replaces hand-walking
-`~/dev/presentations/novhub-local-stack/NOVHUB_LOCAL_RUNBOOK.md` step by step.
+`docs/NOVHUB_LOCAL_RUNBOOK.md` step by step.
 
 Not a standalone application: it orchestrates seven other checkouts
 (`~/dev/NovApi`, `~/dev/NovData`, `~/dev/NovSync`, `~/dev/novhub`, `~/dev/plc_simulator`,
@@ -46,6 +46,7 @@ desktop display, which nothing running non-interactively can check or start.
 | `perf-rank-robots.sh` | HUB-106: read-only - ranks a `--target`'s robots by `weld_run` total over a wide fixed date range, to pick a BEFORE/AFTER robot on a target whose data we don't control |
 | `perf-rank-robots.py` | The actual ranking logic `perf-rank-robots.sh` calls — not run directly |
 | `cloud-tunnel.sh` | HUB-106: read-only SSH local-port-forward (`open`/`status`/`close`) through the cat-dev bastion to one environment's DB + OpenSearch, for `cloud-check.sh` |
+| `cloud-local.sh` | HUB-106: starts/stops this checkout's NovApi and NovApp against dev Postgres/OpenSearch through already-open tunnels |
 | `cloud-check.sh` | HUB-106: read-only credential check for one environment through its tunnel - DB `SELECT 1` + robot count, OpenSearch health + count tried via basic auth and AWS SigV4 |
 | `cloud-check.py` | The actual check logic `cloud-check.sh` calls — not run directly |
 | `cloud-bastion-check.sh` | HUB-106: plain TCP reachability check from the cat-dev bastion to one environment's DB/OpenSearch hosts, via `exec_ubuntu` |
@@ -174,6 +175,10 @@ it, or stopping just PLCSIM+`plc-node`), use `./novhub-local-stack/reset.sh` —
 
 ## HUB-106 perf-testing tools
 
+To run local NovApi and NovApp against the existing dev data, follow the
+[cloud-local launcher guide](CLOUD-LOCAL-LAUNCHER.md). This mode is separate
+from the local-stack startup sequence and does not manage tunnels or seed data.
+
 ```bash
 ./novhub-local-stack/perf-setup.sh          # one-time: install Playwright (prompts for sudo on the Chromium/apt step)
 ./novhub-local-stack/perf-seed.sh seed      # create the frozen synthetic dataset (10 robots x 2,000 runs)
@@ -292,7 +297,7 @@ reachability check run from the bastion itself, for confirming it can even reach
 environment's hosts before trying to tunnel to them.
 
 The full before/after procedure (frozen-dataset check, folder layout, when to use which tool) is
-documented once, in `~/dev/presentations/novhub-local-stack/hub106-perf-results/README.md` — this
+documented once, in `docs/hub106-perf-results/README.md` — this
 section is the tool reference, that doc is the procedure.
 
 ## Appendix: OpenSearch manual operations

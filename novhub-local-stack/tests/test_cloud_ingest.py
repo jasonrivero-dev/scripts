@@ -1,5 +1,6 @@
 import copy
 import importlib.util
+import io
 import json
 import os
 import random
@@ -25,7 +26,6 @@ os.environ.update({
     "CLOUD_INGEST_AWS_PROFILE": "test-profile",
     "CLOUD_INGEST_ROBOT_ID": "1555",
     "CLOUD_INGEST_INGESTER_REPO": "/tmp/cloud-ingest-test-ingester",
-    "CLOUD_INGEST_RANK_SCRIPT": "/tmp/cloud-ingest-test-rank",
     "CLOUD_INGEST_LOG_DIR": "/tmp/cloud-ingest-test-logs",
 })
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -61,7 +61,9 @@ def empty_audit_state():
     return {
         "run_id_field": "run_id",
         "job_id_field": "weld_session.job_id.keyword",
+        "coarse": False,
         "opensearch_counts": {},
+        "opensearch_summary": None,
         "opensearch_unkeyed_docs": 0,
         "postgres_counts": {},
     }
@@ -75,9 +77,11 @@ def complete_audit_state(run_count):
     return {
         "run_id_field": "run_id",
         "job_id_field": "weld_session.job_id.keyword",
+        "coarse": False,
         "opensearch_counts": {
             run_id: cloud_ingest.POINTS_PER_RUN + 1 for run_id in run_ids
         },
+        "opensearch_summary": None,
         "opensearch_unkeyed_docs": 0,
         "postgres_counts": {
             run_id: 1 for run_id in range(
@@ -97,6 +101,15 @@ class FakeResponse:
 
     def json(self):
         return self.payload
+
+
+class FakeProc:
+    def __init__(self, lines, returncode=0):
+        self.stdout = iter(lines)
+        self.returncode = returncode
+
+    def wait(self):
+        return self.returncode
 
 
 class FakeCursor:
@@ -256,10 +269,23 @@ class CloudIngestTemplateTests(unittest.TestCase):
         transform.assert_not_called()
         run_ingester.assert_not_called()
 
+    def test_explicit_runs_is_never_capped_by_default_target(self):
+        requested = cloud_ingest.DEFAULT_TARGET_TOTAL + 5000
+        args = Namespace(probe=False, runs=requested, dry_run=True, template=None)
+        with (
+            patch.object(cloud_ingest, "current_total", return_value=100),
+            patch.object(cloud_ingest, "audit_synthetic_state", return_value=empty_audit_state()),
+            patch.object(cloud_ingest, "print_plan") as print_plan,
+        ):
+            cloud_ingest.do_ingest(args, None, "index", None)
+        print_plan.assert_called_once_with(requested, 100, label="Runs to add")
+
     def test_partial_synthetic_data_stops_before_ingester(self):
         args = Namespace(probe=False, runs=1, dry_run=False, template="unused.json")
         partial_state = {
+            "coarse": False,
             "opensearch_counts": {cloud_ingest.RUN_ID_BASE + 1: 50},
+            "opensearch_summary": None,
             "opensearch_unkeyed_docs": 0,
             "postgres_counts": {},
         }
@@ -311,7 +337,9 @@ class CloudIngestTemplateTests(unittest.TestCase):
     def test_post_ingest_audit_mismatch_returns_failure(self):
         args = Namespace(probe=False, runs=1, dry_run=False, template="sample.json")
         partial_state = {
+            "coarse": False,
             "opensearch_counts": {cloud_ingest.RUN_ID_BASE + 1: 50},
+            "opensearch_summary": None,
             "opensearch_unkeyed_docs": 0,
             "postgres_counts": {cloud_ingest.RUN_ID_BASE + 1: 1},
         }
@@ -435,11 +463,95 @@ class CloudIngestAuditTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Postgres synthetic-run audit failed"):
                 cloud_ingest.postgres_run_counts({})
 
+    def test_fine_audit_used_unless_it_reports_truncation(self):
+        connection = FakeConnection([])
+        with (
+            patch.object(cloud_ingest, "signed_opensearch_json", return_value=self.mapping()),
+            patch.object(cloud_ingest, "pg_connect", return_value=connection),
+            patch.object(cloud_ingest, "opensearch_run_counts_fine",
+                         return_value=({}, 0, False)) as fine,
+            patch.object(cloud_ingest, "opensearch_run_summary_coarse") as coarse,
+        ):
+            cloud_ingest.audit_synthetic_state("example", "synthetic-index", {})
+            fine.assert_called_once()
+            self.assertEqual(fine.call_args.args[-1], cloud_ingest.MAX_SAFE_AGGREGATION_SIZE + 1)
+            coarse.assert_not_called()
+
+    def test_coarse_summary_uses_scripted_min_max_not_native_field(self):
+        # run_id is mapped as "keyword" in the real dev index - OpenSearch's native min/max
+        # aggregations reject keyword fields outright ("not supported for aggregation [min]"),
+        # confirmed against a real run. A scripted min/max avoids that regardless of field type.
+        search_response = {
+            "timed_out": False,
+            "_shards": {"failed": 0},
+            "aggregations": {
+                # OpenSearch always returns a min/max/cardinality agg's "value" as a JSON
+                # float, even for a whole number - never a plain int. Using floats here is
+                # what caught the real bug (parse_run_id rejected them outright).
+                "run_id_cardinality": {"value": 3.0},
+                "run_id_min": {"value": float(cloud_ingest.RUN_ID_BASE + 1)},
+                "run_id_max": {"value": float(cloud_ingest.RUN_ID_BASE + 3)},
+                "missing_run_id": {"doc_count": 0},
+            },
+        }
+        with (
+            patch.object(cloud_ingest, "signed_opensearch_json",
+                         return_value=search_response) as request,
+            patch.object(cloud_ingest, "os_count", return_value=153),
+        ):
+            summary, missing = cloud_ingest.opensearch_run_summary_coarse(
+                "example", "synthetic-index", "run_id", "weld_session.job_id.keyword"
+            )
+        search_body = request.call_args.args[3]
+        for key, kind in (("run_id_min", "min"), ("run_id_max", "max")):
+            agg = search_body["aggs"][key][kind]
+            self.assertIn("script", agg)
+            self.assertNotIn("field", agg)
+        self.assertEqual(summary, {
+            "cardinality": 3,
+            "min": cloud_ingest.RUN_ID_BASE + 1,
+            "max": cloud_ingest.RUN_ID_BASE + 3,
+            "total_docs": 153,
+        })
+        self.assertEqual(missing, 0)
+
+    def test_truncated_fine_audit_falls_back_to_coarse(self):
+        connection = FakeConnection([])
+        with (
+            patch.object(cloud_ingest, "signed_opensearch_json", return_value=self.mapping()),
+            patch.object(cloud_ingest, "pg_connect", return_value=connection),
+            patch.object(cloud_ingest, "opensearch_run_counts_fine",
+                         return_value=(None, None, True)),
+            patch.object(cloud_ingest, "opensearch_run_summary_coarse",
+                         return_value=({"cardinality": 50000, "min": cloud_ingest.RUN_ID_BASE + 1,
+                                        "max": cloud_ingest.RUN_ID_BASE + 50000,
+                                        "total_docs": 50000 * (cloud_ingest.POINTS_PER_RUN + 1)},
+                                       0)) as coarse,
+        ):
+            state = cloud_ingest.audit_synthetic_state("example", "synthetic-index", {})
+        coarse.assert_called_once()
+        self.assertTrue(state["coarse"])
+        self.assertIsNone(state["opensearch_counts"])
+
+    def test_current_total_counts_summary_docs_only(self):
+        with patch.object(cloud_ingest, "os_count", return_value=12345) as count:
+            total = cloud_ingest.current_total("example", "synthetic-index")
+        self.assertEqual(total, 12345)
+        query = count.call_args.args[2]
+        self.assertEqual(
+            query,
+            {"bool": {"filter": [
+                {"term": {"robot.robot_id": 1555}},
+                {"exists": {"field": "weld_summary"}},
+            ]}},
+        )
+
     def test_audit_reports_missing_extra_and_wrong_multiplicities(self):
         first_id = cloud_ingest.RUN_ID_BASE + 1
         second_id = cloud_ingest.RUN_ID_BASE + 2
         third_id = cloud_ingest.RUN_ID_BASE + 3
         state = {
+            "coarse": False,
             "opensearch_counts": {first_id: 50, second_id: 51},
             "opensearch_unkeyed_docs": 0,
             "postgres_counts": {first_id: 1, third_id: 2},
@@ -452,6 +564,7 @@ class CloudIngestAuditTests(unittest.TestCase):
         self.assertIn(f"Postgres run {third_id} has 2 association rows", report)
 
         missing_state = {
+            "coarse": False,
             "opensearch_counts": {first_id: 51},
             "opensearch_unkeyed_docs": 0,
             "postgres_counts": {first_id: 1},
@@ -466,6 +579,7 @@ class CloudIngestAuditTests(unittest.TestCase):
         )
 
         duplicate_state = {
+            "coarse": False,
             "opensearch_counts": {first_id: 102},
             "opensearch_unkeyed_docs": 0,
             "postgres_counts": {first_id: 1},
@@ -488,7 +602,7 @@ class CloudIngestRemovalTests(unittest.TestCase):
             patch.object(cloud_ingest, "pg_connect", return_value=connection),
             patch.object(cloud_ingest, "refresh_index") as refresh,
         ):
-            cloud_ingest.do_remove(Namespace(confirm_delete=True), "example", "index", {})
+            cloud_ingest.do_remove(Namespace(confirm_delete=True, count=None), "example", "index", {})
         return connection, request, refresh, audit
 
     def test_removal_deletes_scoped_records_and_verifies_absence(self):
@@ -501,7 +615,7 @@ class CloudIngestRemovalTests(unittest.TestCase):
         )
 
         self.assertEqual(audit.call_count, 2)
-        self.assertEqual(request.call_args.args[3], "/index/_delete_by_query")
+        self.assertEqual(request.call_args.args[3], "/index/_delete_by_query?slices=auto")
         query = json.loads(request.call_args.kwargs["data"])
         self.assertEqual(
             query,
@@ -568,7 +682,7 @@ class CloudIngestRemovalTests(unittest.TestCase):
             patch.object(cloud_ingest, "refresh_index") as refresh,
         ):
             with self.assertRaisesRegex(SystemExit, "Removal failed"):
-                cloud_ingest.do_remove(Namespace(confirm_delete=True), "example", "index", {})
+                cloud_ingest.do_remove(Namespace(confirm_delete=True, count=None), "example", "index", {})
 
         self.assertEqual(audit.call_count, 2)
         self.assertTrue(connection.committed)
@@ -596,7 +710,7 @@ class CloudIngestRemovalTests(unittest.TestCase):
             patch.object(cloud_ingest, "refresh_index") as refresh,
         ):
             with self.assertRaisesRegex(SystemExit, "Removal failed"):
-                cloud_ingest.do_remove(Namespace(confirm_delete=True), "example", "index", {})
+                cloud_ingest.do_remove(Namespace(confirm_delete=True, count=None), "example", "index", {})
 
         self.assertEqual(audit.call_count, 2)
         request.assert_called_once()
@@ -608,10 +722,74 @@ class CloudIngestRemovalTests(unittest.TestCase):
             patch.object(cloud_ingest, "sigv4_request") as request,
             patch.object(cloud_ingest, "pg_connect") as pg_connect,
         ):
-            cloud_ingest.do_remove(Namespace(confirm_delete=False), "example", "index", {})
+            cloud_ingest.do_remove(Namespace(confirm_delete=False, count=None), "example", "index", {})
         audit.assert_not_called()
         request.assert_not_called()
         pg_connect.assert_not_called()
+
+    def test_count_exceeding_present_runs_refuses_without_deleting(self):
+        pre_state = complete_audit_state(3)
+        with (
+            patch("builtins.input", return_value="1555"),
+            patch.object(cloud_ingest, "audit_synthetic_state", return_value=pre_state),
+            patch.object(cloud_ingest, "delete_opensearch_synthetic_docs") as es_delete,
+            patch.object(cloud_ingest, "delete_postgres_synthetic_associations") as pg_delete,
+        ):
+            with self.assertRaisesRegex(SystemExit, "exceeds the 3 synthetic run"):
+                cloud_ingest.do_remove(Namespace(confirm_delete=True, count=5), "example", "index", {})
+        es_delete.assert_not_called()
+        pg_delete.assert_not_called()
+
+    def test_count_removes_only_the_highest_run_ids(self):
+        pre_state = complete_audit_state(5)
+        post_state = complete_audit_state(3)
+        connection = FakeConnection([], rowcount=2)
+        with (
+            patch("builtins.input", return_value="1555"),
+            patch.object(cloud_ingest, "audit_synthetic_state",
+                         side_effect=[pre_state, post_state]),
+            patch.object(cloud_ingest, "sigv4_request",
+                         return_value=(FakeResponse(
+                             {"deleted": 102, "timed_out": False, "failures": []}
+                         ), None)) as request,
+            patch.object(cloud_ingest, "pg_connect", return_value=connection),
+            patch.object(cloud_ingest, "refresh_index"),
+        ):
+            cloud_ingest.do_remove(Namespace(confirm_delete=True, count=2), "example", "index", {})
+
+        expected_ids = [cloud_ingest.RUN_ID_BASE + 4, cloud_ingest.RUN_ID_BASE + 5]
+        query = json.loads(request.call_args.kwargs["data"])
+        self.assertEqual(query["query"]["bool"]["filter"][1]["terms"]["run_id"], expected_ids)
+        self.assertEqual(connection.fake_cursor.query,
+                          "DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id = ANY(%s)")
+        self.assertEqual(connection.fake_cursor.params, (1555, expected_ids))
+
+
+class CloudIngestProgressTests(unittest.TestCase):
+    def test_progress_position_derived_from_run_id_not_a_tally(self):
+        run_ids = [cloud_ingest.RUN_ID_BASE + 1, cloud_ingest.RUN_ID_BASE + 2,
+                   cloud_ingest.RUN_ID_BASE + 2, cloud_ingest.RUN_ID_BASE + 5]
+        lines = [f"[INFO] [1555] Starting HermitV2 parse for RunID: {run_id}\n" for run_id in run_ids]
+        with (
+            tempfile.TemporaryDirectory() as log_dir,
+            patch.object(cloud_ingest, "LOG_DIR", log_dir),
+            patch.object(cloud_ingest.subprocess, "Popen", return_value=FakeProc(lines)),
+            patch("sys.stdout", new_callable=io.StringIO),
+            patch("sys.stderr", new_callable=io.StringIO) as fake_stderr,
+        ):
+            returncode, log_path = cloud_ingest.run_ingester_tee_scrubbed(["true"], "/tmp", {}, 10)
+
+            self.assertEqual(returncode, 0)
+            progress_lines = fake_stderr.getvalue().split("\r")
+            # a duplicated run_id (2) reports the same position twice; a skipped one (3, 4)
+            # still reports the correct position (5) on the next line seen - neither drifts,
+            # since position always comes from the run_id itself, never an incremented count.
+            self.assertIn(" 1/10 runs ( 10%)", progress_lines[1])
+            self.assertIn(" 2/10 runs ( 20%)", progress_lines[2])
+            self.assertIn(" 2/10 runs ( 20%)", progress_lines[3])
+            self.assertIn(" 5/10 runs ( 50%)", progress_lines[4])
+            with open(log_path) as f:
+                self.assertEqual(f.read().count("Starting HermitV2 parse for RunID"), 4)
 
 
 if __name__ == "__main__":

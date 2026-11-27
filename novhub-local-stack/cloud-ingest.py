@@ -35,10 +35,11 @@ AWS_REGION = os.environ.get("CLOUD_INGEST_AWS_REGION")
 AWS_PROFILE = os.environ.get("CLOUD_INGEST_AWS_PROFILE")
 ROBOT_ID = os.environ.get("CLOUD_INGEST_ROBOT_ID")
 INGESTER_REPO = os.environ.get("CLOUD_INGEST_INGESTER_REPO")
-PERF_RANK_SCRIPT = os.environ.get("CLOUD_INGEST_RANK_SCRIPT")
 LOG_DIR = os.environ.get("CLOUD_INGEST_LOG_DIR")
 
-TARGET_TOTAL = 2260          # "about 2,260" per the owner - test's NovAI-1555 has 2,259
+DEFAULT_TARGET_TOTAL = 5000   # only used when neither --probe nor --runs is given - how many
+                               # runs to add to reach this total. --probe/--runs always mean
+                               # exactly what you asked for; this never caps them.
 POINTS_PER_RUN = 50          # modest, per the owner
 RUN_ID_BASE = 90000000       # far above any real run_id - also the --remove floor (run_id >=
                               # this). perfload's run-id formula is run-id-base + robot_index*100000
@@ -52,7 +53,7 @@ RUN_ID_BASE = 90000000       # far above any real run_id - also the --remove flo
 RUN_SPACING_S = POINTS_PER_RUN + 300   # perfload's own formula (cmd/perfload/main.go buildPayload)
 SYNTHETIC_JOB_ID_FMT = "PERF-ING-JOB-{robot_id}"   # perfload's own naming (cmd/perfload/main.go)
 RANGE_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema_mapping.json")
-RUN_ID_AGGREGATION_SIZE = TARGET_TOTAL + 1
+MAX_SAFE_AGGREGATION_SIZE = 9000   # margin under OpenSearch's default search.max_buckets
 RUN_ID_MAPPING_TYPES = {"byte", "short", "integer", "long", "unsigned_long", "keyword"}
 FEEDBACK_FIELDS = (
     "autonomy_dist_x_raw",
@@ -70,7 +71,7 @@ FEEDBACK_FIELDS = (
 )
 
 REQUIRED = [ENV, SECRETS_DIR, DB_LOCAL_PORT, ES_LOOPBACK, AWS_REGION, AWS_PROFILE,
-            ROBOT_ID, INGESTER_REPO, PERF_RANK_SCRIPT, LOG_DIR]
+            ROBOT_ID, INGESTER_REPO, LOG_DIR]
 if not all(REQUIRED):
     sys.exit("missing env vars - run this via cloud-ingest.sh, not directly")
 
@@ -104,40 +105,15 @@ def pg_connect(db_kv):
     )
 
 
-def parse_robot_total_output(stdout_text):
-    """Defensive parse of perf-rank-robots.sh --robot-id's stdout: it's supposed to be
-    exactly one token (a bare integer, or "10000+") now that its own setup/log output always
-    goes to stderr - but don't just trust that blindly. Take the LAST non-empty line and
-    validate it; raise ValueError on anything else so the caller refuses instead of guessing."""
-    lines = [l for l in stdout_text.splitlines() if l.strip()]
-    if not lines:
-        raise ValueError("stdout was empty")
-    last = lines[-1].strip()
-    if last == "10000+":
-        return "10000+"
-    if not re.fullmatch(r"\d+", last):
-        raise ValueError(f"last non-empty stdout line is not a number or '10000+': {last!r}")
-    return int(last)
-
-
-def current_total():
-    """The "daemon-free path": re-run perf-rank-robots.sh, which already logs into the real
-    target NovApi over HTTPS (no tunnel needed for this part - NovApi/NovApp are public
-    endpoints; only Postgres/OpenSearch need the tunnel) and asks weld_run for one robot."""
-    result = subprocess.run(
-        [PERF_RANK_SCRIPT, "--target", ENV, "--robot-id", str(ROBOT_ID)],
-        capture_output=True, text=True, timeout=30,
-    )
-    if result.returncode != 0:
-        sys.exit(f"could not read robot {ROBOT_ID}'s current total: {result.stderr.strip()}")
-    try:
-        parsed = parse_robot_total_output(result.stdout)
-    except ValueError as e:
-        sys.exit(f"unexpected output from perf-rank-robots.sh --robot-id: {e}")
-    if parsed == "10000+":
-        sys.exit(f"robot {ROBOT_ID} is already at OpenSearch's 10000 total cap per weld_run - "
-                  f"can't compute how many more to add from this signal; stopping")
-    return parsed
+def current_total(es_host, index):
+    """Counts this robot's weld_run summary docs directly (weld_summary is set only on the
+    one per-run summary doc, never on points) - no 10000 cap, unlike NovApi's own total."""
+    return os_count(es_host, index, {
+        "bool": {"filter": [
+            {"term": {"robot.robot_id": ROBOT_ID}},
+            {"exists": {"field": "weld_summary"}},
+        ]}
+    })
 
 
 def os_count(es_host, index, query):
@@ -225,7 +201,22 @@ def parse_run_id(value):
     raise ValueError("OpenSearch returned a non-integer synthetic run_id")
 
 
-def opensearch_run_counts(es_host, index, run_id_field, job_id_field):
+def _validated_aggregations(response):
+    if response.get("timed_out") is not False:
+        raise ValueError("OpenSearch synthetic-run audit timed out")
+    if response.get("terminated_early") is True:
+        raise ValueError("OpenSearch synthetic-run audit terminated early")
+    shards = response.get("_shards")
+    failed_shards = shards.get("failed") if isinstance(shards, dict) else None
+    if type(failed_shards) is not int or failed_shards != 0:
+        raise ValueError("OpenSearch synthetic-run audit had failed shards")
+    aggregations = response.get("aggregations")
+    if not isinstance(aggregations, dict):
+        raise ValueError("OpenSearch synthetic-run audit response is missing aggregations")
+    return aggregations
+
+
+def opensearch_run_counts_fine(es_host, index, run_id_field, job_id_field, size):
     job_id = SYNTHETIC_JOB_ID_FMT.format(robot_id=ROBOT_ID)
     response = signed_opensearch_json(
         "POST",
@@ -238,7 +229,7 @@ def opensearch_run_counts(es_host, index, run_id_field, job_id_field):
                 "runs": {
                     "terms": {
                         "field": run_id_field,
-                        "size": RUN_ID_AGGREGATION_SIZE,
+                        "size": size,
                         "order": {"_key": "asc"},
                     }
                 },
@@ -246,22 +237,16 @@ def opensearch_run_counts(es_host, index, run_id_field, job_id_field):
             },
         },
     )
-    if response.get("timed_out") is not False:
-        raise ValueError("OpenSearch synthetic-run audit timed out")
-    if response.get("terminated_early") is True:
-        raise ValueError("OpenSearch synthetic-run audit terminated early")
-    shards = response.get("_shards")
-    failed_shards = shards.get("failed") if isinstance(shards, dict) else None
-    if type(failed_shards) is not int or failed_shards != 0:
-        raise ValueError("OpenSearch synthetic-run audit had failed shards")
-    aggregations = response.get("aggregations")
-    runs = aggregations.get("runs") if isinstance(aggregations, dict) else None
-    missing = aggregations.get("missing_run_id") if isinstance(aggregations, dict) else None
+    aggregations = _validated_aggregations(response)
+    runs = aggregations.get("runs")
+    missing = aggregations.get("missing_run_id")
     if not isinstance(runs, dict) or not isinstance(missing, dict):
         raise ValueError("OpenSearch synthetic-run audit response is missing aggregations")
     other_doc_count = runs.get("sum_other_doc_count")
-    if type(other_doc_count) is not int or other_doc_count != 0:
-        raise ValueError("OpenSearch synthetic-run audit truncated the run_id buckets")
+    if type(other_doc_count) is not int:
+        raise ValueError("OpenSearch synthetic-run audit returned invalid aggregation data")
+    if other_doc_count != 0:
+        return None, None, True
     buckets = runs.get("buckets")
     missing_count = missing.get("doc_count")
     if not isinstance(buckets, list) or type(missing_count) is not int or missing_count < 0:
@@ -279,7 +264,65 @@ def opensearch_run_counts(es_host, index, run_id_field, job_id_field):
         if run_id in run_counts:
             raise ValueError(f"OpenSearch synthetic-run audit duplicated bucket {run_id}")
         run_counts[run_id] = bucket["doc_count"]
-    return run_counts, missing_count
+    return run_counts, missing_count, False
+
+
+def opensearch_run_summary_coarse(es_host, index, run_id_field, job_id_field):
+    """Bucket-free equivalent of opensearch_run_counts_fine for when the possible run-id
+    range exceeds MAX_SAFE_AGGREGATION_SIZE - cardinality/min/max instead of per-run_id
+    buckets, so it can't name which individual run_id is wrong, only the aggregate shape."""
+    job_id = SYNTHETIC_JOB_ID_FMT.format(robot_id=ROBOT_ID)
+    response = signed_opensearch_json(
+        "POST",
+        es_host,
+        f"/{index}/_search",
+        {
+            "size": 0,
+            "query": {"term": {job_id_field: job_id}},
+            "aggs": {
+                "run_id_cardinality": {
+                    "cardinality": {"field": run_id_field, "precision_threshold": 40000}
+                },
+                "run_id_min": {"min": {"script": {
+                    "lang": "painless",
+                    "source": "Long.parseLong(doc[params.field].value.toString())",
+                    "params": {"field": run_id_field},
+                }}},
+                "run_id_max": {"max": {"script": {
+                    "lang": "painless",
+                    "source": "Long.parseLong(doc[params.field].value.toString())",
+                    "params": {"field": run_id_field},
+                }}},
+                "missing_run_id": {"missing": {"field": run_id_field}},
+            },
+        },
+    )
+    aggregations = _validated_aggregations(response)
+    missing = aggregations.get("missing_run_id", {})
+    missing_count = missing.get("doc_count")
+    if type(missing_count) is not int or missing_count < 0:
+        raise ValueError("OpenSearch synthetic-run audit returned invalid aggregation data")
+
+    def whole_number(value, label):
+        # min/max/cardinality aggregation "value" fields come back as a JSON float even for
+        # a whole number (e.g. 90000001.0) - never a plain int.
+        if type(value) is int:
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        raise ValueError(f"OpenSearch synthetic-run audit returned an invalid {label}")
+
+    cardinality = whole_number(aggregations.get("run_id_cardinality", {}).get("value"), "cardinality")
+    run_min = aggregations.get("run_id_min", {}).get("value")
+    run_max = aggregations.get("run_id_max", {}).get("value")
+    total_docs = os_count(es_host, index, {"term": {job_id_field: job_id}})
+    summary = {
+        "cardinality": cardinality,
+        "min": whole_number(run_min, "min run_id") if run_min is not None else None,
+        "max": whole_number(run_max, "max run_id") if run_max is not None else None,
+        "total_docs": total_docs,
+    }
+    return summary, missing_count
 
 
 def postgres_run_counts(db_kv):
@@ -309,26 +352,49 @@ def postgres_run_counts(db_kv):
 
 
 def audit_synthetic_state(es_host, index, db_kv):
+    """Tries the fine, per-run_id audit first at a FIXED safe bucket size
+    (MAX_SAFE_AGGREGATION_SIZE, never DEFAULT_TARGET_TOTAL - that's unrelated to how much
+    data actually exists) - one request in the common case. Only falls back to the coarse,
+    bucket-free audit if that comes back truncated, meaning more run_ids actually exist than
+    fit safely in one request."""
     mapping = signed_opensearch_json("GET", es_host, f"/{index}/_mapping")
     run_id_field, job_id_field = resolve_audit_fields(mapping)
-    os_counts, unkeyed_docs = opensearch_run_counts(
-        es_host, index, run_id_field, job_id_field
+    os_counts, unkeyed_docs, truncated = opensearch_run_counts_fine(
+        es_host, index, run_id_field, job_id_field, MAX_SAFE_AGGREGATION_SIZE + 1
     )
+    os_summary = None
+    if truncated:
+        os_summary, unkeyed_docs = opensearch_run_summary_coarse(es_host, index, run_id_field, job_id_field)
+        os_counts = None
     return {
         "run_id_field": run_id_field,
         "job_id_field": job_id_field,
+        "coarse": truncated,
         "opensearch_counts": os_counts,
+        "opensearch_summary": os_summary,
         "opensearch_unkeyed_docs": unkeyed_docs,
         "postgres_counts": postgres_run_counts(db_kv),
     }
 
 
 def audit_is_empty(state):
+    if state["coarse"]:
+        os_empty = state["opensearch_summary"]["total_docs"] == 0
+    else:
+        os_empty = not state["opensearch_counts"]
     return (
-        not state["opensearch_counts"]
+        os_empty
         and state["opensearch_unkeyed_docs"] == 0
         and not state["postgres_counts"]
     )
+
+
+def opensearch_totals(state):
+    if state["coarse"]:
+        s = state["opensearch_summary"]
+        return s["cardinality"], s["total_docs"], s["max"]
+    os_counts = state["opensearch_counts"]
+    return len(os_counts), sum(os_counts.values()), (max(os_counts) if os_counts else None)
 
 
 def format_run_ids(run_ids):
@@ -340,28 +406,63 @@ def format_run_ids(run_ids):
 
 
 def print_audit_snapshot(label, state):
-    os_counts = state["opensearch_counts"]
     pg_counts = state["postgres_counts"]
+    if state["coarse"]:
+        s = state["opensearch_summary"]
+        os_desc = (f"{s['total_docs']} document(s) across ~{s['cardinality']} run ID(s) "
+                   f"[{s['min']}..{s['max']}] (coarse audit, no per-run_id detail)")
+    else:
+        os_counts = state["opensearch_counts"]
+        os_desc = (f"{sum(os_counts.values())} document(s) across {len(os_counts)} run ID(s) "
+                   f"[{format_run_ids(os_counts)}]")
     print(
-        f"{label} audit: OpenSearch {sum(os_counts.values())} document(s) across "
-        f"{len(os_counts)} run ID(s) [{format_run_ids(os_counts)}], "
-        f"{state['opensearch_unkeyed_docs']} without run_id; Postgres "
-        f"{sum(pg_counts.values())} association row(s) across {len(pg_counts)} "
-        f"run ID(s) [{format_run_ids(pg_counts)}]."
+        f"{label} audit: OpenSearch {os_desc}, {state['opensearch_unkeyed_docs']} without "
+        f"run_id; Postgres {sum(pg_counts.values())} association row(s) across "
+        f"{len(pg_counts)} run ID(s) [{format_run_ids(pg_counts)}]."
     )
 
 
-def audit_issues(state, expected_run_ids=None):
-    os_counts = state["opensearch_counts"]
-    pg_counts = state["postgres_counts"]
-    os_ids = set(os_counts)
-    pg_ids = set(pg_counts)
+def _audit_issues_coarse(s, pg_ids, expected_run_ids):
     issues = []
-
-    if state["opensearch_unkeyed_docs"]:
+    expected_docs = POINTS_PER_RUN + 1
+    if expected_run_ids is None:
+        if s["cardinality"] and (
+            s["min"] != RUN_ID_BASE + 1 or s["cardinality"] != s["max"] - s["min"] + 1
+        ):
+            issues.append("synthetic run IDs are not a contiguous range from the configured base")
+        if s["cardinality"] != len(pg_ids):
+            issues.append(
+                f"OpenSearch has {s['cardinality']} distinct run ID(s) but Postgres has "
+                f"{len(pg_ids)} - coarse audit can't name which run IDs differ"
+            )
+        expected_total = s["cardinality"] * expected_docs
+    else:
+        expected_min = min(expected_run_ids, default=None)
+        expected_max = max(expected_run_ids, default=None)
+        if (s["cardinality"], s["min"], s["max"]) != (len(expected_run_ids), expected_min, expected_max):
+            issues.append(
+                f"OpenSearch run ID range/count does not match the expected batch (expected "
+                f"{len(expected_run_ids)} run(s) [{expected_min}..{expected_max}], found "
+                f"{s['cardinality']} [{s['min']}..{s['max']}])"
+            )
+        missing_pg = expected_run_ids - pg_ids
+        extra_pg = pg_ids - expected_run_ids
+        if missing_pg:
+            issues.append(f"Postgres is missing run IDs: {format_run_ids(missing_pg)}")
+        if extra_pg:
+            issues.append(f"Postgres has unexpected run IDs: {format_run_ids(extra_pg)}")
+        expected_total = len(expected_run_ids) * expected_docs
+    if s["total_docs"] != expected_total:
         issues.append(
-            f"OpenSearch has {state['opensearch_unkeyed_docs']} synthetic document(s) without run_id"
+            f"OpenSearch has {s['total_docs']} total document(s); expected {expected_total} - "
+            f"coarse audit can't name which run is short"
         )
+    return issues
+
+
+def _audit_issues_fine(os_counts, pg_ids, expected_run_ids):
+    issues = []
+    os_ids = set(os_counts)
     if expected_run_ids is None:
         missing_os = pg_ids - os_ids
         missing_pg = os_ids - pg_ids
@@ -369,11 +470,7 @@ def audit_issues(state, expected_run_ids=None):
             issues.append(f"OpenSearch is missing run IDs: {format_run_ids(missing_os)}")
         if missing_pg:
             issues.append(f"Postgres is missing run IDs: {format_run_ids(missing_pg)}")
-        if os_ids and (
-            min(os_ids) != RUN_ID_BASE + 1
-            or max(os_ids) > RUN_ID_BASE + TARGET_TOTAL
-            or len(os_ids) != max(os_ids) - RUN_ID_BASE
-        ):
+        if os_ids and (min(os_ids) != RUN_ID_BASE + 1 or len(os_ids) != max(os_ids) - RUN_ID_BASE):
             issues.append("synthetic run IDs are not a contiguous range from the configured base")
     else:
         missing_os = expected_run_ids - os_ids
@@ -392,9 +489,22 @@ def audit_issues(state, expected_run_ids=None):
     expected_docs = POINTS_PER_RUN + 1
     for run_id, count in os_counts.items():
         if count != expected_docs:
-            issues.append(
-                f"OpenSearch run {run_id} has {count} documents; expected {expected_docs}"
-            )
+            issues.append(f"OpenSearch run {run_id} has {count} documents; expected {expected_docs}")
+    return issues
+
+
+def audit_issues(state, expected_run_ids=None):
+    pg_counts = state["postgres_counts"]
+    pg_ids = set(pg_counts)
+    issues = []
+    if state["opensearch_unkeyed_docs"]:
+        issues.append(
+            f"OpenSearch has {state['opensearch_unkeyed_docs']} synthetic document(s) without run_id"
+        )
+    if state["coarse"]:
+        issues += _audit_issues_coarse(state["opensearch_summary"], pg_ids, expected_run_ids)
+    else:
+        issues += _audit_issues_fine(state["opensearch_counts"], pg_ids, expected_run_ids)
     for run_id, count in pg_counts.items():
         if count != 1:
             issues.append(f"Postgres run {run_id} has {count} association rows; expected 1")
@@ -445,7 +555,7 @@ def print_plan(n_runs, total_now, label="Runs to add"):
     print(f"""ENV:                  {ENV}
 ROBOT ID:             {ROBOT_ID}
 Current total:        {total_now}
-Target total:         ~{TARGET_TOTAL}
+Default target:       ~{DEFAULT_TARGET_TOTAL} (only used when neither --probe nor --runs is given)
 {label}:        {n_runs}
 Points per run:       {POINTS_PER_RUN}
 Run-id base:          {RUN_ID_BASE} (fixed - also the removal boundary; every run of this
@@ -637,7 +747,12 @@ def write_private_template(template, directory):
     return path
 
 
-def run_ingester_tee_scrubbed(cmd, cwd, env):
+RUN_START_MARKER = "Starting HermitV2 parse for RunID:"   # ingester's own log line, hermit.go -
+                                                           # fires exactly once per run, ending
+                                                           # in the run's own run_id
+
+
+def run_ingester_tee_scrubbed(cmd, cwd, env, n_runs):
     """Runs the real ingester, scrubbing every line of its combined stdout+stderr before it's
     shown or stored anywhere - confirmed for real that a signature-mismatch 403 can echo back
     x-amz-security-token (a real, usable session token), and bulk.go has at least two log
@@ -645,7 +760,10 @@ def run_ingester_tee_scrubbed(cmd, cwd, env):
     ("[CRITICAL-FAIL] Entire Bulk Request Rejected! Error: %v") and the per-document
     OnFailure callback's "[DEBUG-FAIL] --- OPENSEARCH REJECTION ---" block (prints
     res.Error.Reason and the raw err). Writes the scrubbed log to a 0600 file under
-    .state/cloud-ingest-logs/ and returns (exit_code, log_path)."""
+    .state/cloud-ingest-logs/ and returns (exit_code, log_path). A live position counter goes
+    to stderr only (never the log file or stdout), one line updated in place: position is the
+    run_id on that line minus RUN_ID_BASE, not a running tally, so it can't drift if a line is
+    ever missed or duplicated."""
     os.makedirs(LOG_DIR, exist_ok=True, mode=0o700)
     os.chmod(LOG_DIR, 0o700)
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -653,11 +771,21 @@ def run_ingester_tee_scrubbed(cmd, cwd, env):
     fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True, bufsize=1)
+    width = len(str(n_runs))
+    printed_progress = False
     with os.fdopen(fd, "w") as logf:
         for line in proc.stdout:
             clean = scrub_sensitive(line)
             sys.stdout.write(clean)
             logf.write(clean)
+            if RUN_START_MARKER in clean:
+                position = int(clean.rsplit(":", 1)[-1].strip()) - RUN_ID_BASE
+                pct = position * 100 // n_runs if n_runs else 100
+                print(f"\r[PROGRESS] {position:>{width}}/{n_runs} runs ({pct:>3}%)   ",
+                      end="", file=sys.stderr, flush=True)
+                printed_progress = True
+    if printed_progress:
+        print(file=sys.stderr)
     proc.wait()
     return proc.returncode, log_path
 
@@ -677,16 +805,23 @@ def build_child_env(es_host, index, db_kv):
     }
 
 
-def delete_opensearch_synthetic_docs(es_host, index, job_id_field, job_id):
-    query = {"query": {"term": {job_id_field: job_id}}}
+def delete_opensearch_synthetic_docs(es_host, index, job_id_field, job_id, run_id_field=None, run_ids=None):
+    if run_ids is None:
+        query = {"query": {"term": {job_id_field: job_id}}}
+    else:
+        query = {"query": {"bool": {"filter": [
+            {"term": {job_id_field: job_id}},
+            {"terms": {run_id_field: sorted(run_ids)}},
+        ]}}}
     resp, err = sigv4_request(
         "POST",
         es_host,
         ES_LOOPBACK,
-        f"/{index}/_delete_by_query",
+        f"/{index}/_delete_by_query?slices=auto",
         AWS_REGION,
         AWS_PROFILE,
         data=json.dumps(query).encode(),
+        timeout=120,
     )
     if err:
         raise ValueError(f"OpenSearch delete failed: {scrub_sensitive(err)}")
@@ -709,15 +844,21 @@ def delete_opensearch_synthetic_docs(es_host, index, job_id_field, job_id):
     return deleted
 
 
-def delete_postgres_synthetic_associations(db_kv):
+def delete_postgres_synthetic_associations(db_kv, run_ids=None):
     conn = None
     try:
         conn = pg_connect(db_kv)
         with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id >= %s",
-                (ROBOT_ID, RUN_ID_BASE),
-            )
+            if run_ids is None:
+                cur.execute(
+                    "DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id >= %s",
+                    (ROBOT_ID, RUN_ID_BASE),
+                )
+            else:
+                cur.execute(
+                    "DELETE FROM weld_presets_associations WHERE robot_id = %s AND run_id = ANY(%s)",
+                    (ROBOT_ID, sorted(run_ids)),
+                )
             deleted = cur.rowcount
         conn.commit()
     except psycopg2.Error as e:
@@ -732,12 +873,17 @@ def delete_postgres_synthetic_associations(db_kv):
 
 def do_remove(args, es_host, index, db_kv):
     job_id = SYNTHETIC_JOB_ID_FMT.format(robot_id=ROBOT_ID)
-    pg_statement = f"DELETE FROM weld_presets_associations WHERE robot_id = {ROBOT_ID} AND run_id >= {RUN_ID_BASE};"
-    print(f"Would delete, scoped to job_id \"{job_id}\" / run_id >= {RUN_ID_BASE} only (never "
-          f"touching robot {ROBOT_ID}'s real, non-synthetic data - this also covers any probe "
-          f"run, since probes use this same job_id/run_id scheme):\n"
-          f"  OpenSearch: POST /{index}/_delete_by_query (term on the mapped job_id field)\n"
-          f"  Postgres:   {pg_statement}\n")
+    count = args.count
+    if count is None:
+        pg_statement = f"DELETE FROM weld_presets_associations WHERE robot_id = {ROBOT_ID} AND run_id >= {RUN_ID_BASE};"
+        print(f"Would delete ALL synthetic data, scoped to job_id \"{job_id}\" / run_id >= "
+              f"{RUN_ID_BASE} only (never touching robot {ROBOT_ID}'s real data):\n"
+              f"  OpenSearch: POST /{index}/_delete_by_query (term on the mapped job_id field)\n"
+              f"  Postgres:   {pg_statement}\n")
+    else:
+        print(f"Would delete the {count} most recently added synthetic run(s) only, scoped to "
+              f"job_id \"{job_id}\" plus their exact run_ids (never touching robot {ROBOT_ID}'s "
+              f"real data or older synthetic runs).\n")
     if not args.confirm_delete:
         print("(dry run by default - pass --confirm-delete to actually delete)")
         return
@@ -756,10 +902,24 @@ def do_remove(args, es_host, index, db_kv):
         print("[WARN] Pre-delete stores are incomplete or inconsistent; continuing with "
               "scoped cleanup so a retry can finish it: " + "; ".join(pre_issues))
 
+    target_run_ids = None
+    expected_remaining = set()
+    if count is not None:
+        run_count, _, current_max = opensearch_totals(pre_state)
+        if not run_count or current_max is None:
+            sys.exit(f"--count {count} requested but no synthetic runs are currently present")
+        if count > run_count:
+            sys.exit(f"--count {count} exceeds the {run_count} synthetic run(s) currently present")
+        target_run_ids = set(range(current_max - count + 1, current_max + 1))
+        expected_remaining = set(range(RUN_ID_BASE + 1, current_max - count + 1))
+        print(f"[INFO] --count {count}: removing run_id {min(target_run_ids)}..{current_max} "
+              f"of {run_count} present")
+
     delete_errors = []
     try:
         es_deleted = delete_opensearch_synthetic_docs(
-            es_host, index, pre_state["job_id_field"], job_id
+            es_host, index, pre_state["job_id_field"], job_id,
+            run_id_field=pre_state["run_id_field"], run_ids=target_run_ids,
         )
         print(f"[INFO] OpenSearch: deleted {es_deleted} document(s)")
     except ValueError as e:
@@ -767,7 +927,7 @@ def do_remove(args, es_host, index, db_kv):
         print(f"[WARN] {delete_errors[-1]}", file=sys.stderr)
 
     try:
-        pg_deleted = delete_postgres_synthetic_associations(db_kv)
+        pg_deleted = delete_postgres_synthetic_associations(db_kv, run_ids=target_run_ids)
         print(f"[INFO] Postgres: deleted {pg_deleted} row(s)")
     except ValueError as e:
         delete_errors.append(scrub_sensitive(str(e)))
@@ -781,21 +941,35 @@ def do_remove(args, es_host, index, db_kv):
         sys.exit(f"post-delete audit failed: {scrub_sensitive(str(e))}{details}")
     print_audit_snapshot("Post-delete", post_state)
 
-    residual_issues = audit_issues(post_state, set())
-    if not audit_is_empty(post_state):
+    if count is None:
+        residual_issues = audit_issues(post_state, set())
+        ok = audit_is_empty(post_state)
+    else:
+        residual_issues = audit_issues(post_state, expected_remaining)
+        ok = not residual_issues
+    if not ok:
         details = residual_issues + delete_errors
         sys.exit("[RESULT] Removal failed; synthetic data remains or could not be verified: "
                  + "; ".join(details))
     if delete_errors:
         print("[WARN] A delete request reported an error, but post-delete audit verified "
-              "absence from both stores: " + "; ".join(delete_errors))
-    print("[RESULT] Removal verified: no synthetic data remains in OpenSearch or Postgres.")
+              "the expected state anyway: " + "; ".join(delete_errors))
+    if count is None:
+        print("[RESULT] Removal verified: no synthetic data remains in OpenSearch or Postgres.")
+    else:
+        print(f"[RESULT] Removal verified: the {count} requested run(s) are gone; the rest "
+              f"of the batch is intact.")
 
 
 def do_ingest(args, es_host, index, db_kv):
-    total_now = current_total()
-    remaining = max(TARGET_TOTAL - total_now, 0)
-    if remaining == 0:
+    total_now = current_total(es_host, index)
+    remaining = max(DEFAULT_TARGET_TOTAL - total_now, 0)
+
+    if args.probe:
+        n_runs = 1
+    elif args.runs is not None:
+        n_runs = args.runs
+    elif remaining == 0:
         try:
             state = audit_synthetic_state(es_host, index, db_kv)
         except ValueError as e:
@@ -803,18 +977,10 @@ def do_ingest(args, es_host, index, db_kv):
         issues = audit_issues(state)
         if issues:
             sys.exit("pre-ingest audit failed: " + "; ".join(issues))
-        print(f"[INFO] robot {ROBOT_ID} is already at or above the ~{TARGET_TOTAL} target "
-              f"(current: {total_now}); synthetic data audit passed - nothing to add.")
+        print(f"[INFO] robot {ROBOT_ID} is already at or above the ~{DEFAULT_TARGET_TOTAL} default "
+              f"(current: {total_now}); synthetic data audit passed - nothing to add. Pass "
+              f"--runs N to add more anyway.")
         return
-
-    if args.probe:
-        n_runs = 1
-    elif args.runs is not None:
-        n_runs = args.runs
-        if n_runs > remaining:
-            print(f"[INFO] --runs {n_runs} exceeds what's needed to reach the ~{TARGET_TOTAL} "
-                  f"target ({remaining} more) - capped to {remaining}.")
-            n_runs = remaining
     else:
         n_runs = remaining
 
@@ -872,7 +1038,7 @@ def do_ingest(args, es_host, index, db_kv):
               f"(cwd={INGESTER_REPO}) - credentials/DSN are set only on this subprocess's own "
               f"environment, never printed, never in argv. Combined output is scrubbed and logged "
               f"below.", file=sys.stderr)
-        returncode, log_path = run_ingester_tee_scrubbed(cmd, INGESTER_REPO, child_env)
+        returncode, log_path = run_ingester_tee_scrubbed(cmd, INGESTER_REPO, child_env, n_runs)
     print(f"\n[INFO] full (scrubbed) ingester log: {log_path}")
     if returncode != 0:
         sys.exit(f"ingester exited {returncode} - see {log_path}")
@@ -886,18 +1052,17 @@ def do_ingest(args, es_host, index, db_kv):
     except ValueError as e:
         sys.exit(f"post-ingest audit failed: {scrub_sensitive(str(e))}")
     post_issues = audit_issues(post_state, expected_run_ids)
-    os_run_count = len(post_state["opensearch_counts"])
-    os_doc_count = sum(post_state["opensearch_counts"].values())
+    os_run_count, os_doc_count, _ = opensearch_totals(post_state)
     pg_run_count = len(post_state["postgres_counts"])
     pg_count = sum(post_state["postgres_counts"].values())
-    rank_total = current_total()
+    rank_total = current_total(es_host, index)
 
     print(f"""
 === VERIFICATION ===
 OpenSearch raw doc count for robot {ROBOT_ID}: {raw_before} -> {raw_after} (delta {final_delta}, expected {expected_delta})
 OpenSearch synthetic runs/documents: {os_run_count}/{n_runs} runs, {os_doc_count}/{expected_delta} documents
 Postgres synthetic runs/associations: {pg_run_count}/{n_runs} runs, {pg_count}/{n_runs} rows
-perf-rank-robots.sh --target {ENV} --robot-id {ROBOT_ID}: {rank_total} (expected {total_now + n_runs})
+OpenSearch weld_run summary count for robot {ROBOT_ID}: {rank_total} (expected {total_now + n_runs})
 """)
 
     verification_errors = list(post_issues)
@@ -912,15 +1077,15 @@ perf-rank-robots.sh --target {ENV} --robot-id {ROBOT_ID}: {rank_total} (expected
     if verification_errors:
         sys.exit("[RESULT] Verification failed: " + "; ".join(verification_errors))
 
-    new_remaining = max(TARGET_TOTAL - rank_total, 0)
+    new_remaining = max(DEFAULT_TARGET_TOTAL - rank_total, 0)
     print("[RESULT] Verification passed.")
     if new_remaining > 0:
-        print(f"To reach the ~{TARGET_TOTAL} target, remove this complete batch, then ingest "
-              f"the full {remaining} remaining runs in one shot:\n"
+        print(f"(Informational, not required: to also reach the default (~{DEFAULT_TARGET_TOTAL}), "
+              f"remove this batch and ingest {new_remaining} runs in one shot - there's no "
+              f"incremental top-up, raising a batch always means remove-then-reingest the "
+              f"full new amount:\n"
               f"  ./cloud-ingest.sh --env {ENV} --remove --confirm-delete\n"
-              f"  ./cloud-ingest.sh --env {ENV} --runs {remaining} --template {args.template}")
-    else:
-        print(f"Robot {ROBOT_ID} is now at the ~{TARGET_TOTAL} target - nothing more to add.")
+              f"  ./cloud-ingest.sh --env {ENV} --runs {new_remaining} --template {args.template})")
 
 
 def main():
@@ -928,11 +1093,14 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                      help="ingest mode: print the plan, write nothing. Accepted (as a no-op) "
                           "with --remove too, which is dry by default already.")
-    ap.add_argument("--runs", type=int, help="ingest exactly this many runs (capped at however "
-                     "many are left to reach the target); default is however many are left")
+    ap.add_argument("--runs", type=int, help="ingest exactly this many runs, never capped; "
+                     "default (no --runs/--probe) is however many are left to reach "
+                     "DEFAULT_TARGET_TOTAL")
     ap.add_argument("--probe", action="store_true", help="shorthand for --runs 1, plus the "
                      "verification output - do this before a full run")
     ap.add_argument("--remove", action="store_true")
+    ap.add_argument("--count", type=int, help="--remove only: remove just this many of the "
+                     "most recently added synthetic runs, instead of the whole batch")
     ap.add_argument("--confirm-delete", action="store_true",
                      help="--remove only: actually delete (after typing the robot id back) - "
                           "without this, --remove only ever prints what it would delete")
@@ -943,6 +1111,11 @@ def main():
         sys.exit("--runs must be a positive integer")
     if args.probe and args.runs is not None:
         sys.exit("--probe and --runs are mutually exclusive (--probe is --runs 1)")
+    if args.count is not None:
+        if not args.remove:
+            sys.exit("--count is only valid with --remove")
+        if args.count < 1:
+            sys.exit("--count must be a positive integer")
 
     live_identity, identity_err = get_caller_identity(AWS_REGION, AWS_PROFILE)
     if live_identity is None:
